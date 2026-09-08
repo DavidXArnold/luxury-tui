@@ -49,10 +49,16 @@ not just detail:
   rendering, diffing, command palette matching).
 - **`cargo build --release`** across our target matrix (linux x86_64/aarch64,
   macOS x86_64/aarch64) as a build-health check, gated behind fmt/clippy/test.
-- No integration tests against a real cluster yet (would need a `kind`
-  cluster in CI); the `k8s::*` modules are structured so their pure logic
-  (filtering, diffing, tree-building) is unit-testable without one, and the
-  actual API calls are thin wrappers around `kube-rs`.
+- **`cargo test --test cluster_integration`** (job `integration`) against a
+  real [`kind`](https://kind.sigs.k8s.io/) cluster with
+  [`kwok`](https://kwok.sigs.k8s.io/)'s controller installed alongside the
+  real one — real pod scheduling for lifecycle/attention checks, cheap fake
+  nodes (no real hardware) for cordon/drain checks. See
+  `tests/cluster_integration.rs`; skipped locally unless
+  `LUXURY_TUI_INTEGRATION=1` is set and a cluster is reachable, so it never
+  affects the plain `cargo test` job. Kept as a separate, non-blocking
+  status check rather than a `build` prerequisite since a live cluster is
+  slower and flakier than the rest of the pipeline.
 
 ## Keeping up with upstream
 

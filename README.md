@@ -122,3 +122,15 @@ warnings`, and `cargo test` all run in CI and are expected to pass. See
 [PARITY.md](PARITY.md) before starting work on a new feature — it tracks
 what's implemented, what's planned, and what upstream has shipped that we
 haven't looked at yet.
+
+CI also runs `tests/cluster_integration.rs` against a real
+[`kind`](https://kind.sigs.k8s.io/) cluster with
+[`kwok`](https://kwok.sigs.k8s.io/) installed. To run those locally against
+your own kind+kwok cluster:
+
+```sh
+LUXURY_TUI_INTEGRATION=1 KUBECONFIG=... cargo test --test cluster_integration
+```
+
+Without `LUXURY_TUI_INTEGRATION=1` set, those tests skip themselves — plain
+`cargo test` never needs a cluster.

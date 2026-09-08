@@ -1,11 +1,4 @@
-mod app;
-mod config;
-mod event;
-mod k8s;
-mod logo;
-mod tasks;
-mod theme;
-mod ui;
+use luxury_tui::{app, config, event, k8s, logo, tasks, theme, ui};
 
 use std::io::stdout;
 use std::time::Duration;

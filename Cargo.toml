@@ -8,6 +8,10 @@ license = "GPL-3.0-or-later"
 repository = "https://github.com/luxury-tui/luxury-tui"
 readme = "README.md"
 
+[lib]
+name = "luxury_tui"
+path = "src/lib.rs"
+
 [[bin]]
 name = "luxury-tui"
 path = "src/main.rs"

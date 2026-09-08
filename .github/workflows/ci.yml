@@ -43,8 +43,41 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-features
 
+  integration:
+    name: integration (kind + kwok)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: luxury-tui-it
+
+      - name: Install kwok (fake nodes/pods, real API + scheduler)
+        run: |
+          set -euo pipefail
+          KWOK_REPO=kubernetes-sigs/kwok
+          KWOK_LATEST_RELEASE=$(curl -fsSL "https://api.github.com/repos/${KWOK_REPO}/releases/latest" | jq -r '.tag_name')
+          echo "Installing kwok $KWOK_LATEST_RELEASE"
+          kubectl apply -f "https://github.com/${KWOK_REPO}/releases/download/${KWOK_LATEST_RELEASE}/kwok.yaml"
+          kubectl apply -f "https://github.com/${KWOK_REPO}/releases/download/${KWOK_LATEST_RELEASE}/stage-fast.yaml"
+          kubectl -n kube-system rollout status deployment/kwok-controller --timeout=120s
+
+      - name: Run cluster integration tests
+        env:
+          LUXURY_TUI_INTEGRATION: "1"
+        run: cargo test --test cluster_integration -- --test-threads=1
+
   build:
     name: build (${{ matrix.target }})
+    # Integration is intentionally not a prerequisite here: it depends on
+    # kind/kwok and a live cluster, so it's slower and has more ways to be
+    # flaky than the rest of this pipeline. Release builds gate on the fast,
+    # deterministic checks; integration is still required on its own status
+    # check via branch protection.
     needs: [fmt, clippy, test]
     strategy:
       fail-fast: false
