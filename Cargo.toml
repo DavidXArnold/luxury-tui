@@ -5,7 +5,7 @@ edition = "2021"
 description = "A fast, terminal-native Kubernetes cluster manager. A TUI companion inspired by Luxury Yacht."
 authors = ["Luxury TUI contributors"]
 license = "GPL-3.0-or-later"
-repository = "https://github.com/luxury-tui/luxury-tui"
+repository = "https://github.com/DavidXArnold/luxury-tui"
 readme = "README.md"
 
 [lib]

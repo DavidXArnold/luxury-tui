@@ -71,7 +71,7 @@ for a terminal UI (multi-window layouts, draggable panels), is in
 Requires a recent stable Rust toolchain ([rustup.rs](https://rustup.rs)).
 
 ```sh
-git clone https://github.com/luxury-tui/luxury-tui.git
+git clone https://github.com/DavidXArnold/luxury-tui.git
 cd luxury-tui
 cargo build --release
 ./target/release/luxury-tui
