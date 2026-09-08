@@ -229,6 +229,15 @@ async fn handle_event(app: &mut App, tx: &event::EventSender, evt: AppEvent) {
         AppEvent::PortForwardStarted(Err(e)) => {
             app.set_status(format!("port-forward failed: {e:#}"))
         }
+        AppEvent::DebugContainerReady(Ok((namespace, pod, container))) => {
+            app.set_status(format!(
+                "debug container {container} ready, attaching shell..."
+            ));
+            app.pending_shell = Some((namespace, pod, Some(container)));
+        }
+        AppEvent::DebugContainerReady(Err(e)) => {
+            app.set_status(format!("debug container failed: {e:#}"))
+        }
     }
 }
 
@@ -253,6 +262,11 @@ fn refresh_all(app: &App, tx: &event::EventSender) {
 async fn handle_key(app: &mut App, tx: &event::EventSender, key: crossterm::event::KeyEvent) {
     if app.palette.active {
         handle_palette_key(app, tx, key);
+        return;
+    }
+
+    if app.debug_prompt.is_some() {
+        handle_debug_prompt_key(app, tx, key);
         return;
     }
 
@@ -431,6 +445,15 @@ fn handle_workloads_key(app: &mut App, tx: &event::EventSender, key: crossterm::
                 app.pending_shell = Some((pod.namespace.clone(), pod.name.clone(), None));
             }
         }
+        KeyCode::Char('S') => {
+            if let Some(pod) = selected_pod(app) {
+                app.debug_prompt = Some(app::DebugContainerPrompt {
+                    namespace: pod.namespace.clone(),
+                    pod: pod.name.clone(),
+                    image: "busybox:latest".to_string(),
+                });
+            }
+        }
         KeyCode::Char('p') => {
             if let (Some(pod), Some(client)) = (selected_pod(app), app.client.clone()) {
                 tasks::start_port_forward(
@@ -483,32 +506,56 @@ fn move_selection(app: &mut App, delta: i32) {
     app.workload_list_state.select(Some(next));
 }
 
-/// 'v' on the Pods list: first press marks the "left" side of a comparison,
-/// second press (on a different pod) marks the "right" side and runs the
-/// diff. A third press starts a fresh comparison.
+/// 'v' on any workload list: first press marks the "left" side of a
+/// comparison, second press (on another item of the *same kind*) marks the
+/// "right" side and runs the diff. A third press starts a fresh comparison.
 fn mark_for_compare(app: &mut App, tx: &event::EventSender) {
-    let Some(pod) = selected_pod(app) else { return };
-    let picked = (pod.namespace.clone(), pod.name.clone());
+    let Some(picked) = selected_workload_ref(app) else {
+        return;
+    };
 
     if app.compare.left.is_none() {
         app.compare.left = Some(picked);
-        app.set_status("marked for compare — pick a second pod and press 'v' again");
+        app.set_status("marked for compare — pick a second, same-kind item and press 'v' again");
     } else if app.compare.right.is_none() {
-        app.compare.right = Some(picked);
-        if let (Some(left), Some(right), Some(client)) = (
-            app.compare.left.clone(),
-            app.compare.right.clone(),
-            app.client.clone(),
-        ) {
-            tasks::compare_pods(client, left, right, tx.clone());
+        let left = app.compare.left.clone().unwrap();
+        if left.kind != picked.kind {
+            app.set_status(format!(
+                "can't compare a {} with a {} — pick another {}",
+                left.kind, picked.kind, left.kind
+            ));
+            return;
+        }
+        app.compare.right = Some(picked.clone());
+        if let Some(client) = app.client.clone() {
+            tasks::compare_resources(
+                client,
+                left.kind.clone(),
+                (left.namespace.clone(), left.name.clone()),
+                (picked.namespace.clone(), picked.name.clone()),
+                tx.clone(),
+            );
             app.screen = Screen::Compare;
         }
     } else {
         app.compare.left = Some(picked);
         app.compare.right = None;
         app.compare.diff.clear();
-        app.set_status("marked for compare — pick a second pod and press 'v' again");
+        app.set_status("marked for compare — pick a second, same-kind item and press 'v' again");
     }
+}
+
+/// The row currently selected on the Workloads/Attention screen, as a
+/// compare target — works for any kind (Pods, Deployments, Nodes, ...),
+/// since `active_workloads()` is what's actually rendered there.
+fn selected_workload_ref(app: &App) -> Option<app::CompareRef> {
+    let idx = app.workload_list_state.selected()?;
+    let row = app.active_workloads().into_iter().nth(idx)?;
+    Some(app::CompareRef {
+        kind: row.kind.to_string(),
+        namespace: row.namespace,
+        name: row.name,
+    })
 }
 
 fn selected_pod(app: &App) -> Option<crate::k8s::resources::PodSummary> {
@@ -538,20 +585,43 @@ fn start_logs_for(app: &mut App, tx: &event::EventSender, namespace: String, pod
         container: None,
         follow: true,
         tail_lines: Some(500),
-        timestamps: false,
+        // Always ask Kubernetes for timestamps; app.logs.show_timestamps
+        // controls whether we display them, so toggling that never needs to
+        // restart the stream.
+        timestamps: true,
         previous: false,
     };
     tasks::start_log_stream(client, req, tx.clone());
 }
 
 fn handle_logs_key(app: &mut App, key: crossterm::event::KeyEvent) {
+    // While actively typing a search term, every key is text input — that
+    // way a search for e.g. "fail" doesn't also toggle follow via its 'f'.
+    if app.logs.editing_search {
+        match key.code {
+            KeyCode::Enter | KeyCode::Esc => app.logs.editing_search = false,
+            KeyCode::Backspace => {
+                app.logs.search.pop();
+            }
+            KeyCode::Char(c) => app.logs.search.push(c),
+            _ => {}
+        }
+        return;
+    }
+
     match key.code {
+        KeyCode::Char('/') => {
+            app.logs.editing_search = true;
+            app.logs.search.clear();
+        }
         KeyCode::Char('f') => {
             app.logs.follow = !app.logs.follow;
             if app.logs.follow {
                 app.logs.scroll = 0;
             }
         }
+        KeyCode::Char('T') => app.logs.show_timestamps = !app.logs.show_timestamps,
+        KeyCode::Char('j') => app.logs.json_pretty = !app.logs.json_pretty,
         KeyCode::Up => {
             app.logs.follow = false;
             app.logs.scroll = app.logs.scroll.saturating_add(1);
@@ -559,11 +629,37 @@ fn handle_logs_key(app: &mut App, key: crossterm::event::KeyEvent) {
         KeyCode::Down => {
             app.logs.scroll = app.logs.scroll.saturating_sub(1);
         }
-        KeyCode::Char('/') => app.logs.search.clear(),
-        KeyCode::Backspace => {
-            app.logs.search.pop();
+        _ => {}
+    }
+}
+
+fn handle_debug_prompt_key(
+    app: &mut App,
+    tx: &event::EventSender,
+    key: crossterm::event::KeyEvent,
+) {
+    let Some(prompt) = app.debug_prompt.as_mut() else {
+        return;
+    };
+    match key.code {
+        KeyCode::Esc => app.debug_prompt = None,
+        KeyCode::Enter => {
+            let prompt = app.debug_prompt.take().unwrap();
+            if let Some(client) = app.client.clone() {
+                app.set_status(format!("launching debug container ({})...", prompt.image));
+                tasks::add_debug_container(
+                    client,
+                    prompt.namespace,
+                    prompt.pod,
+                    prompt.image,
+                    tx.clone(),
+                );
+            }
         }
-        KeyCode::Char(c) => app.logs.search.push(c),
+        KeyCode::Backspace => {
+            prompt.image.pop();
+        }
+        KeyCode::Char(c) => prompt.image.push(c),
         _ => {}
     }
 }

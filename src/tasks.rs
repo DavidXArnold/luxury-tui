@@ -113,20 +113,40 @@ pub fn cordon_node(client: Client, node_name: String, unschedulable: bool, tx: E
     });
 }
 
-pub fn compare_pods(
+/// `left`/`right` are (namespace, name) — namespace is ignored for
+/// cluster-scoped kinds like Node. Both must be the same `kind`, matching
+/// `WorkloadKind::api_kind()`.
+pub fn compare_resources(
     client: Client,
+    kind: String,
     left: (String, String),
     right: (String, String),
     tx: EventSender,
 ) {
     tokio::spawn(async move {
-        let result = k8s::diff::compare_pods(
+        let result = k8s::diff::compare_resources(
             &client,
+            &kind,
             (left.0.as_str(), left.1.as_str()),
             (right.0.as_str(), right.1.as_str()),
         )
         .await;
         let _ = tx.send(AppEvent::DiffReady(result));
+    });
+}
+
+pub fn add_debug_container(
+    client: Client,
+    namespace: String,
+    pod: String,
+    image: String,
+    tx: EventSender,
+) {
+    tokio::spawn(async move {
+        let result = k8s::exec::add_debug_container(&client, &namespace, &pod, &image, None)
+            .await
+            .map(|container| (namespace, pod, container));
+        let _ = tx.send(AppEvent::DebugContainerReady(result));
     });
 }
 

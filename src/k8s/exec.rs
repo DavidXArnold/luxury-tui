@@ -50,10 +50,6 @@ pub async fn run_interactive_shell(
 
 /// Adds an ephemeral debug container to a running pod (equivalent to
 /// `kubectl debug`), returning the name assigned so the caller can exec into it.
-///
-/// Not yet bound to a keybinding — needs an image-picker prompt in the UI
-/// first (see README's feature status table).
-#[allow(dead_code)]
 pub async fn add_debug_container(
     client: &Client,
     namespace: &str,

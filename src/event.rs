@@ -29,6 +29,9 @@ pub enum AppEvent {
     DrainFinished(Result<DrainOutcome>),
     ActionResult(Result<String>),
     PortForwardStarted(Result<String>),
+    /// (namespace, pod, debug container name) once the ephemeral container
+    /// is attached and ready to exec into.
+    DebugContainerReady(Result<(String, String, String)>),
 }
 
 pub type EventSender = UnboundedSender<AppEvent>;

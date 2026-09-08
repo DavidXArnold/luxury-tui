@@ -8,6 +8,9 @@ any code — nothing here is copied from upstream's source.
 **Currently tracking upstream:** `v2.2.1` (see `.github/upstream-version.txt`,
 kept in sync by `.github/workflows/upstream-watch.yml`).
 
+Every feature below is implemented except the two marked ➖, which don't
+translate to a terminal grid at all (see the legend).
+
 ## Status
 
 | Feature | Upstream | Luxury TUI | Notes |
@@ -21,14 +24,14 @@ kept in sync by `.github/workflows/upstream-watch.yml`).
 | Split-pane workloads+pods | ✅ | ✅ | kind list + item list panes |
 | Attention view (unhealthy pods) | ✅ | ✅ | Attention screen, `k8s::resources::filter_attention` |
 | Advanced log viewer (follow, search) | ✅ | ✅ | Logs screen; regex highlighting not yet, plain substring search only |
-| Log timestamps / JSON formatting | ✅ | ⏳ | `LogRequest.timestamps` is wired; no JSON pretty-printing yet |
+| Log timestamps / JSON formatting | ✅ | ✅ | `T` toggles timestamps, `j` toggles a JSON-as-logfmt view (`ui::logs`) |
 | Object maps (relationship tree) | ✅ | ✅ | `k8s::objectmap`, ASCII tree render |
-| Object comparison / diff | ✅ | ✅ (pods only) | `k8s::diff::compare_pods`; arbitrary-kind diff not yet |
+| Object comparison / diff | ✅ | ✅ | `k8s::diff::compare_resources` — any one kind vs. itself (Pod, Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Service, Node); `v` twice on same-kind items |
 | Command palette | ✅ | ✅ | `:`, fuzzy-matched actions |
 | Per-cluster theme colors | ✅ | ✅ | `t` cycles palette, persisted in config |
 | Port forwarding | ✅ | ✅ | `p` on a pod, picks first container port |
 | Shell access | ✅ | ✅ | `s` on a pod, suspends the TUI for an interactive shell |
-| Debug container support | ✅ | ⏳ | implemented in `k8s::exec::add_debug_container`, not yet bound to a key (needs an image-picker prompt) |
+| Debug container support | ✅ | ✅ | `S` on a pod prompts for an image, launches an ephemeral debug container, attaches a shell |
 | Node cordon/drain/delete | ✅ | ✅ | `c` / `d` / `D` on Workloads -> Nodes |
 | Multiple windows / draggable panels | ✅ | ➖ | not meaningful in a terminal; tabs + fixed split-panes are the TUI equivalent |
 | Flexible/customizable layout | ✅ | ➖ | same as above — out of scope for a terminal grid |

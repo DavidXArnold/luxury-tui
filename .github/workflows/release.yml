@@ -9,6 +9,9 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: write # softprops/action-gh-release needs this to create the release
+
 env:
   CARGO_TERM_COLOR: always
 

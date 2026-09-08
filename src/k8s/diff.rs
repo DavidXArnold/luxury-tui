@@ -2,9 +2,13 @@
 //! two namespaces, or two pods suspected of configuration drift) by
 //! pretty-printing their JSON and running a text diff over it.
 
-use anyhow::Result;
-use k8s_openapi::api::core::v1::Pod;
+use anyhow::{bail, Result};
+use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
+use k8s_openapi::api::batch::v1::{CronJob, Job};
+use k8s_openapi::api::core::v1::{Node, Pod, Service};
 use kube::{Api, Client};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde_json::Value;
 use similar::{ChangeTag, TextDiff};
 
@@ -30,22 +34,63 @@ fn strip_noise(mut value: Value) -> Value {
     value
 }
 
-/// Fetches two pods (by namespace/name) and returns a line-by-line diff of
-/// their specs, with the noisy, always-different metadata stripped out.
-pub async fn compare_pods(
+/// Fetches two resources of the same kind (by namespace/name — namespace is
+/// ignored for cluster-scoped kinds like Node) and returns a line-by-line
+/// diff of them, with the noisy, always-different metadata stripped out.
+///
+/// `kind` matches `app::WorkloadKind::api_kind()` — "Pod", "Deployment",
+/// "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob", "Service", or
+/// "Node".
+pub async fn compare_resources(
     client: &Client,
+    kind: &str,
     left: (&str, &str),
     right: (&str, &str),
 ) -> Result<Vec<DiffLine>> {
-    let a = fetch_pod_json(client, left.0, left.1).await?;
-    let b = fetch_pod_json(client, right.0, right.1).await?;
+    let a = fetch_resource_json(client, kind, left.0, left.1).await?;
+    let b = fetch_resource_json(client, kind, right.0, right.1).await?;
     Ok(diff_json(&a, &b))
 }
 
-async fn fetch_pod_json(client: &Client, namespace: &str, name: &str) -> Result<Value> {
-    let api: Api<Pod> = Api::namespaced(client.clone(), namespace);
-    let pod = api.get(name).await?;
-    Ok(strip_noise(serde_json::to_value(pod)?))
+async fn fetch_resource_json(
+    client: &Client,
+    kind: &str,
+    namespace: &str,
+    name: &str,
+) -> Result<Value> {
+    let value = match kind {
+        "Pod" => fetch_namespaced::<Pod>(client, namespace, name).await?,
+        "Deployment" => fetch_namespaced::<Deployment>(client, namespace, name).await?,
+        "StatefulSet" => fetch_namespaced::<StatefulSet>(client, namespace, name).await?,
+        "DaemonSet" => fetch_namespaced::<DaemonSet>(client, namespace, name).await?,
+        "ReplicaSet" => fetch_namespaced::<ReplicaSet>(client, namespace, name).await?,
+        "Job" => fetch_namespaced::<Job>(client, namespace, name).await?,
+        "CronJob" => fetch_namespaced::<CronJob>(client, namespace, name).await?,
+        "Service" => fetch_namespaced::<Service>(client, namespace, name).await?,
+        "Node" => fetch_cluster_scoped::<Node>(client, name).await?,
+        other => bail!("comparison isn't supported for kind '{other}'"),
+    };
+    Ok(strip_noise(value))
+}
+
+async fn fetch_namespaced<K>(client: &Client, namespace: &str, name: &str) -> Result<Value>
+where
+    K: kube::Resource<DynamicType = (), Scope = kube::core::NamespaceResourceScope>
+        + Clone
+        + DeserializeOwned
+        + Serialize
+        + std::fmt::Debug,
+{
+    let api: Api<K> = Api::namespaced(client.clone(), namespace);
+    Ok(serde_json::to_value(api.get(name).await?)?)
+}
+
+async fn fetch_cluster_scoped<K>(client: &Client, name: &str) -> Result<Value>
+where
+    K: kube::Resource<DynamicType = ()> + Clone + DeserializeOwned + Serialize + std::fmt::Debug,
+{
+    let api: Api<K> = Api::all(client.clone());
+    Ok(serde_json::to_value(api.get(name).await?)?)
 }
 
 pub fn diff_json(a: &Value, b: &Value) -> Vec<DiffLine> {

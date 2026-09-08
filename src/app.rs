@@ -88,19 +88,52 @@ impl WorkloadKind {
     }
 }
 
-#[derive(Default)]
 pub struct LogViewerState {
     pub lines: Vec<String>,
     pub search: String,
+    /// While true, keystrokes on the Logs screen type into `search` instead
+    /// of being treated as commands (so e.g. an 'f' while searching doesn't
+    /// also toggle follow).
+    pub editing_search: bool,
     pub follow: bool,
     pub target: Option<(String, String, Option<String>)>, // namespace, pod, container
     pub scroll: usize,
+    /// Every stream is requested with Kubernetes timestamps on; this only
+    /// controls whether we strip them back off before display.
+    pub show_timestamps: bool,
+    /// Render lines that parse as JSON as `key=value` pairs instead of raw
+    /// JSON — easier to scan for structured logs.
+    pub json_pretty: bool,
+}
+
+impl Default for LogViewerState {
+    fn default() -> Self {
+        LogViewerState {
+            lines: vec![],
+            search: String::new(),
+            editing_search: false,
+            follow: false,
+            target: None,
+            scroll: 0,
+            show_timestamps: true,
+            json_pretty: false,
+        }
+    }
+}
+
+/// Identifies one resource to diff — any kind we know how to fetch (see
+/// `k8s::diff::compare_resources`), not just pods.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompareRef {
+    pub kind: String,
+    pub namespace: String, // empty for cluster-scoped kinds (Node)
+    pub name: String,
 }
 
 #[derive(Default)]
 pub struct CompareState {
-    pub left: Option<(String, String)>, // namespace, name
-    pub right: Option<(String, String)>,
+    pub left: Option<CompareRef>,
+    pub right: Option<CompareRef>,
     pub diff: Vec<DiffLine>,
 }
 
@@ -149,6 +182,15 @@ pub struct App {
     /// they run until the app exits (see `k8s::portforward`).
     pub port_forwards: Vec<String>,
     pub pending_shell: Option<(String, String, Option<String>)>, // set to request a suspend+exec
+    pub debug_prompt: Option<DebugContainerPrompt>,
+}
+
+/// State for the "type an image, launch a debug container, attach a shell"
+/// flow — `S` on a pod opens this, Enter submits it.
+pub struct DebugContainerPrompt {
+    pub namespace: String,
+    pub pod: String,
+    pub image: String,
 }
 
 impl App {
@@ -177,6 +219,7 @@ impl App {
             palette: PaletteState::default(),
             port_forwards: vec![],
             pending_shell: None,
+            debug_prompt: None,
         }
     }
 

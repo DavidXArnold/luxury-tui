@@ -47,6 +47,33 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.palette.active {
         palette::draw(frame, app, area);
     }
+    if app.debug_prompt.is_some() {
+        draw_debug_prompt(frame, app, area);
+    }
+}
+
+fn draw_debug_prompt(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(prompt) = &app.debug_prompt else {
+        return;
+    };
+    let width = area.width.saturating_sub(10).clamp(30, 70);
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + 2,
+        width,
+        height: 7,
+    };
+    frame.render_widget(ratatui::widgets::Clear, popup);
+
+    let text = format!(
+        "Debug container image for {}/{}:\n\n> {}\n\n(Enter to launch + attach, Esc to cancel)",
+        prompt.namespace, prompt.pod, prompt.image
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.accent))
+        .title(" Launch Debug Container ");
+    frame.render_widget(Paragraph::new(text).block(block), popup);
 }
 
 fn draw_tabs(frame: &mut Frame, app: &App, area: Rect) {
@@ -117,13 +144,17 @@ Navigation
   r                    refresh
   f                    toggle log follow (Logs screen)
   Up/Down              scroll back through logs (Logs screen)
-  /                    clear and start a new search (Logs screen)
-  m                    map object relationships for selected pod
-  v                    mark pod for compare; press again on another to diff
+  /                    start a search; Enter/Esc to stop typing (Logs screen)
+  T                    toggle log timestamps (Logs screen)
+  j                    toggle JSON logfmt view (Logs screen)
+  m                    map object relationships for selected item
+  v                    mark item for compare; press again on a same-kind
+                       item to diff (Workloads/Attention, any kind)
   c                    cordon/uncordon selected node (Workloads: Nodes)
   d                    drain selected node (Workloads: Nodes)
   D                    delete selected node (Workloads: Nodes)
   s                    open interactive shell in selected pod
+  S                    launch a debug container in selected pod, then shell
   p                    start a port-forward to selected pod
   :                    open command palette
   ?                    this help screen

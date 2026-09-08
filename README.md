@@ -1,25 +1,14 @@
-```
-                                        |>
-                                       /||\
-                                      / || \
-                                     /  ||  \
-                                    /   ||   \
-                                   /    ||    \
-                                  /_____||_____\
-                                  \            /
-                           _.--~~~~._  L  _.~~~~--._
-                       _.-'          `--'          `-._
-                   _.-'                                `-._
-               _.-'      L  U  X  U  R  Y     T  U  I       `-._
-        ~~~~~~'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-              `~._                                              _.~'
-                  `~._                                      _.~'
-                      `~._                              _.~'
-                          `~---___              ___---~'
-                                  ~~~~~~~~~~~~~~
-```
+<p align="center"><img src="docs/logo.png" alt="Luxury TUI badge" width="260"></p>
 
-# Luxury TUI
+<h1 align="center">Luxury TUI</h1>
+
+> [!IMPORTANT]
+> **Luxury TUI is an independent, unaffiliated fan project.** It is not made
+> by, endorsed by, or associated with John Jeffers or Luxury Yacht in any
+> way. The badge above is a from-scratch redraw modeled on Luxury Yacht's
+> logo as a visual tribute — it is not upstream's actual artwork, and no
+> upstream code, assets, or trademarks are used. See [Credit](#credit)
+> below.
 
 A fast, terminal-native Kubernetes cluster manager for Linux and macOS,
 written in Rust. Luxury TUI is a terminal companion to
@@ -34,13 +23,42 @@ the GTK4 desktop app this project takes all of its ideas, feature set, and
 UX vocabulary from — the cluster overview, object maps, attention view,
 log viewer, per-cluster theming, object comparison, and more are all his
 design. Luxury TUI is an independent, from-scratch Rust/terminal
-reimplementation — it shares no code with upstream — written because a
+reimplementation — it shares no code with upstream, is not affiliated with
+or endorsed by John Jeffers or Luxury Yacht, and was written because a
 terminal-first, keyboard-driven version felt worth building. If you like
 this, **go star and use [Luxury Yacht](https://github.com/luxury-yacht/app)**;
 it's the original, it has a GUI, and John built it.
 
 See [PARITY.md](PARITY.md) for a feature-by-feature comparison and how this
 project tracks upstream releases.
+
+## Splash screen
+
+The terminal app itself only ever renders ASCII (no image can display
+reliably inside a terminal), shown on the context-picker screen at startup:
+
+```
+                      _.-'''''-._
+                   .-'           '-.
+                  /      .-'''-.     \
+                 |      (   @   )     |
+                  \      '-...-'     /
+                   '-._         _.-'
+                   .-'` ~  ~  ~ `'-.
+                .'                    '.
+               /                        \
+              |                          |
+              |         L u x u r y      |
+              |                          |
+              |          T u i           |
+              |                          |
+               \                        /
+                '.                    .'
+                 '-._              _.-'
+                 .-'`              `'-.
+                |   LUXURY-TUI  APP    |
+                 '--------------------'
+```
 
 ## Features
 
@@ -93,9 +111,11 @@ full keybinding reference. Highlights:
 | `t` | cycle this cluster's color theme |
 | `Enter` | view logs for the selected pod |
 | `m` | map object relationships for the selected pod |
-| `v` | mark a pod for comparison; press again on another to diff |
+| `v` | mark an item for comparison; press again on a same-kind item to diff |
 | `s` | open an interactive shell in the selected pod |
+| `S` | launch a debug container in the selected pod, then shell into it |
 | `p` | port-forward to the selected pod |
+| `T` / `j` | toggle log timestamps / JSON-as-logfmt view (Logs screen) |
 | `c` / `d` / `D` | cordon/uncordon, drain, delete a node |
 | `:` | command palette |
 | `q` | quit |
