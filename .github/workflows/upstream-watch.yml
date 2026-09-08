@@ -1,0 +1,83 @@
+name: Watch upstream Luxury Yacht
+
+# Luxury Yacht (github.com/luxury-yacht/app, by John Jeffers) is a Go/GTK
+# desktop app; we're a Rust TUI. There's no way to auto-port its commits, so
+# instead of trying, this just checks weekly whether upstream cut a new
+# release and files an issue so a human can read the changelog and decide
+# what (if anything) to bring over. See PARITY.md for the running tracking
+# doc this feeds into.
+on:
+  schedule:
+    - cron: "17 9 * * 1" # Mondays, 09:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch upstream's latest release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh api repos/luxury-yacht/app/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
+          if [ -z "$latest" ]; then
+            echo "Could not fetch upstream release (no releases yet, or API error) — skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "tag=$latest" >> "$GITHUB_OUTPUT"
+
+      - name: Compare against last-seen version
+        id: compare
+        if: steps.upstream.outputs.skip != 'true'
+        run: |
+          seen_file=.github/upstream-version.txt
+          seen=$(cat "$seen_file" 2>/dev/null || echo "")
+          echo "seen=$seen" >> "$GITHUB_OUTPUT"
+          if [ "$seen" = "${{ steps.upstream.outputs.tag }}" ]; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: File a tracking issue
+        if: steps.upstream.outputs.skip != 'true' && steps.compare.outputs.new == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          title="Upstream release: luxury-yacht/app $TAG"
+          existing=$(gh issue list --search "in:title \"$title\"" --json number --jq '.[0].number' || echo "")
+          if [ -n "$existing" ]; then
+            echo "Issue already exists (#$existing), not filing a duplicate."
+            exit 0
+          fi
+          body=$(cat <<EOF
+          Upstream [Luxury Yacht](https://github.com/luxury-yacht/app) cut a new release: **$TAG**
+          (previous tracked: ${{ steps.compare.outputs.seen || '(none)' }})
+
+          Release notes: https://github.com/luxury-yacht/app/releases/tag/$TAG
+
+          - [ ] Read the release notes for new/changed features
+          - [ ] Update PARITY.md with anything worth porting to Luxury TUI
+          - [ ] Open follow-up issues for specific features to implement
+          EOF
+          )
+          gh issue create --title "$title" --body "$body" --label "upstream-sync"
+          echo "$TAG" > .github/upstream-version.txt
+
+      - name: Commit updated version marker
+        if: steps.upstream.outputs.skip != 'true' && steps.compare.outputs.new == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/upstream-version.txt
+          git commit -m "chore: note upstream release ${{ steps.upstream.outputs.tag }}"
+          git push

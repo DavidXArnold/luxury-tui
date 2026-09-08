@@ -1,0 +1,197 @@
+mod compare;
+mod logs;
+mod objectmap;
+mod overview;
+pub mod palette;
+mod workloads;
+
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
+use ratatui::Frame;
+
+use crate::app::{App, Screen, MAIN_SCREENS};
+use crate::logo::{LOGO_BADGE, LOGO_LARGE};
+
+pub fn draw(frame: &mut Frame, app: &mut App) {
+    if app.screen == Screen::ContextPicker {
+        draw_context_picker(frame, app);
+        return;
+    }
+
+    let area = frame.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    draw_tabs(frame, app, chunks[0]);
+
+    match app.screen {
+        Screen::Overview => overview::draw(frame, app, chunks[1]),
+        Screen::Workloads | Screen::Attention => workloads::draw(frame, app, chunks[1]),
+        Screen::Logs => logs::draw(frame, app, chunks[1]),
+        Screen::ObjectMap => objectmap::draw(frame, app, chunks[1]),
+        Screen::Compare => compare::draw(frame, app, chunks[1]),
+        Screen::Help => draw_help(frame, chunks[1]),
+        Screen::ContextPicker => unreachable!(),
+    }
+
+    draw_status_bar(frame, app, chunks[2]);
+
+    if app.palette.active {
+        palette::draw(frame, app, area);
+    }
+}
+
+fn draw_tabs(frame: &mut Frame, app: &App, area: Rect) {
+    let titles: Vec<Line> = MAIN_SCREENS
+        .iter()
+        .map(|s| Line::from(screen_label(*s)))
+        .collect();
+    let selected = MAIN_SCREENS
+        .iter()
+        .position(|s| *s == app.screen)
+        .unwrap_or(0);
+    let context_name = app
+        .current_context_name
+        .clone()
+        .unwrap_or_else(|| "(no context)".into());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.accent))
+        .title(Span::styled(
+            format!(" Luxury TUI · {context_name} "),
+            Style::default()
+                .fg(app.theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+    let tabs = Tabs::new(titles)
+        .block(block)
+        .select(selected)
+        .highlight_style(
+            Style::default()
+                .fg(app.theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
+        .divider(" ");
+    frame.render_widget(tabs, area);
+}
+
+fn screen_label(s: Screen) -> &'static str {
+    match s {
+        Screen::Overview => "Overview",
+        Screen::Workloads => "Workloads",
+        Screen::Attention => "Attention",
+        Screen::Logs => "Logs",
+        Screen::ObjectMap => "Object Map",
+        Screen::Compare => "Compare",
+        Screen::Help => "Help",
+        Screen::ContextPicker => "Contexts",
+    }
+}
+
+fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let text = app.status_message.clone().unwrap_or_else(|| {
+        "?:help  Tab:next  Shift+Tab:prev  n:namespace  :  command palette  q:quit".to_string()
+    });
+    let style = Style::default().fg(app.theme.dim);
+    frame.render_widget(Paragraph::new(text).style(style), area);
+}
+
+fn draw_help(frame: &mut Frame, area: Rect) {
+    let help = format!(
+        "{LOGO_BADGE}\n\
+Navigation
+  Tab / Shift+Tab      cycle screens
+  1..6                 jump to screen
+  Up/Down, j/k         move selection
+  Enter                drill in / view logs (Pods)
+  n                    cycle namespace filter (all -> ns1 -> ns2 -> ...)
+  t                    cycle this cluster's color theme
+  r                    refresh
+  f                    toggle log follow (Logs screen)
+  Up/Down              scroll back through logs (Logs screen)
+  /                    clear and start a new search (Logs screen)
+  m                    map object relationships for selected pod
+  v                    mark pod for compare; press again on another to diff
+  c                    cordon/uncordon selected node (Workloads: Nodes)
+  d                    drain selected node (Workloads: Nodes)
+  D                    delete selected node (Workloads: Nodes)
+  s                    open interactive shell in selected pod
+  p                    start a port-forward to selected pod
+  :                    open command palette
+  ?                    this help screen
+  q / Esc              quit / back
+"
+    );
+    let block = Block::default().borders(Borders::ALL).title(" Help ");
+    frame.render_widget(Paragraph::new(help).block(block), area);
+}
+
+fn draw_context_picker(frame: &mut Frame, app: &mut App) {
+    let area = frame.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(14),
+            Constraint::Min(3),
+            Constraint::Length(3),
+        ])
+        .split(area);
+
+    let logo = Paragraph::new(LOGO_LARGE)
+        .alignment(ratatui::layout::Alignment::Center)
+        .style(Style::default().fg(app.theme.accent));
+    frame.render_widget(logo, chunks[0]);
+
+    let items: Vec<Line> = if app.contexts.is_empty() {
+        vec![Line::from(
+            "No contexts found in kubeconfig. Press q to quit.",
+        )]
+    } else {
+        app.contexts
+            .iter()
+            .enumerate()
+            .map(|(i, ctx)| {
+                let marker = if i == app.context_selected {
+                    "> "
+                } else {
+                    "  "
+                };
+                let current = if ctx.is_current { " (current)" } else { "" };
+                let style = if i == app.context_selected {
+                    Style::default()
+                        .fg(app.theme.accent)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                let default_ns = ctx.namespace.as_deref().unwrap_or("default");
+                Line::from(Span::styled(
+                    format!(
+                        "{marker}{}  cluster={} user={} ns={}{}",
+                        ctx.name, ctx.cluster, ctx.user, default_ns, current
+                    ),
+                    style,
+                ))
+            })
+            .collect()
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Select a cluster context (\u{2191}/\u{2193}, Enter) ");
+    frame.render_widget(Paragraph::new(items).block(block), chunks[1]);
+
+    let footer = Paragraph::new(
+        "Luxury TUI \u{2014} a terminal companion inspired by Luxury Yacht by John Jeffers",
+    )
+    .alignment(ratatui::layout::Alignment::Center)
+    .style(Style::default().fg(app.theme.dim));
+    frame.render_widget(footer, chunks[2]);
+}
