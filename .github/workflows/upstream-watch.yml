@@ -1,17 +1,24 @@
 name: Watch upstream Luxury Yacht
 
 # Luxury Yacht (github.com/luxury-yacht/app, by John Jeffers) is a Go/GTK
-# desktop app; we're a Rust TUI. There's no way to auto-port its commits, so
-# instead of trying, this just checks weekly whether upstream cut a new
-# release and files an issue so a human can read the changelog and decide
-# what (if anything) to bring over. See PARITY.md for the running tracking
-# doc this feeds into.
+# desktop app; we're a Rust TUI. There's no such thing as auto-porting a
+# commit between those, so instead of trying, this checks weekly whether
+# upstream cut a new release and — analysis only, never touches src/ or
+# opens a PR — has Claude read what changed, update PARITY.md's tracking
+# table, and file one issue with a per-feature checklist for a human to
+# act on. See PARITY.md for the tracking doc this feeds into.
+#
+# Requires an ANTHROPIC_API_KEY repository secret (Settings > Secrets and
+# variables > Actions). Without it, the review step fails harmlessly (it's
+# marked continue-on-error) — the version-marker commit still runs, so the
+# release isn't re-reviewed forever once the secret is added.
 on:
   schedule:
     - cron: "17 9 * * 1" # Mondays, 09:17 UTC
   workflow_dispatch: {}
 
 permissions:
+  contents: write
   issues: write
 
 jobs:
@@ -47,31 +54,57 @@ jobs:
             echo "new=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: File a tracking issue
+      - name: Ask Claude to review the release and update parity tracking
         if: steps.upstream.outputs.skip != 'true' && steps.compare.outputs.new == 'true'
+        # Non-fatal on purpose: a missing/invalid ANTHROPIC_API_KEY secret
+        # shouldn't wedge the version marker below forever — it stays
+        # unbumped only if *that* step itself fails.
+        continue-on-error: true
+        uses: anthropics/claude-code-action@main
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.upstream.outputs.tag }}
-        run: |
-          title="Upstream release: luxury-yacht/app $TAG"
-          existing=$(gh issue list --search "in:title \"$title\"" --json number --jq '.[0].number' || echo "")
-          if [ -n "$existing" ]; then
-            echo "Issue already exists (#$existing), not filing a duplicate."
-            exit 0
-          fi
-          body=$(cat <<EOF
-          Upstream [Luxury Yacht](https://github.com/luxury-yacht/app) cut a new release: **$TAG**
-          (previous tracked: ${{ steps.compare.outputs.seen || '(none)' }})
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: |
+            --allowedTools "Read,Bash(git:*),Bash(gh:*),Edit(PARITY.md)"
+          prompt: |
+            Luxury Yacht (github.com/luxury-yacht/app) — the Go/GTK desktop
+            app this project (Luxury TUI, a Rust terminal reimplementation)
+            tracks parity against — just published a new release:
+            ${{ steps.upstream.outputs.tag }}
+            (previously tracked here: ${{ steps.compare.outputs.seen || '(none)' }}).
 
-          Release notes: https://github.com/luxury-yacht/app/releases/tag/$TAG
+            Your job is analysis and tracking ONLY. Do not modify anything
+            under src/, tests/, Cargo.toml, or Cargo.lock, and do not open
+            a pull request — this task is scoped to reading, judging, and
+            filing one issue plus a PARITY.md edit, nothing else.
 
-          - [ ] Read the release notes for new/changed features
-          - [ ] Update PARITY.md with anything worth porting to Luxury TUI
-          - [ ] Open follow-up issues for specific features to implement
-          EOF
-          )
-          gh issue create --title "$title" --body "$body" --label "upstream-sync"
-          echo "$TAG" > .github/upstream-version.txt
+            1. Read this repo's PARITY.md and README.md to understand what
+               Luxury TUI has already implemented.
+            2. Look at what changed upstream: fetch the release notes with
+               `gh api repos/luxury-yacht/app/releases/tags/${{ steps.upstream.outputs.tag }}`,
+               and if it's not enough to judge user-facing impact, clone
+               luxury-yacht/app (shallow is fine) and inspect the relevant
+               backend/ source for the changed area.
+            3. For each notable user-facing change or new feature, judge
+               whether it has (or should get) a Luxury TUI equivalent.
+               Remember upstream is a GUI and we're a terminal app —
+               anything purely about window/panel/layout mechanics doesn't
+               translate and should be marked won't-port, same as the
+               existing multi-window/flexible-layout rows in PARITY.md.
+            4. Update PARITY.md: bump the "Currently tracking upstream"
+               line to ${{ steps.upstream.outputs.tag }}, and add or update
+               status-table rows for anything genuinely new. Commit and
+               push that change directly to main yourself (a tracking-doc
+               update, not a code change) with a plain, factual commit
+               message — no other files.
+            5. Check for an existing open issue titled
+               "Upstream release: luxury-yacht/app ${{ steps.upstream.outputs.tag }}"
+               via `gh issue list --search`; if one exists, stop here. If
+               not, open exactly one such issue (label it "upstream-sync")
+               with a checklist: one line per notable change, each noting
+               whether it looks implementable, needs human judgment, or
+               doesn't apply to a TUI, per your PARITY.md analysis above.
 
       - name: Commit updated version marker
         if: steps.upstream.outputs.skip != 'true' && steps.compare.outputs.new == 'true'
