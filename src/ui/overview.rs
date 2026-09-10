@@ -1,11 +1,21 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::widgets::{List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
 use crate::k8s::resources::warning_events;
+use crate::ui::rounded_block;
+
+fn count_style(theme: &crate::theme::Theme, healthy: usize, total: usize) -> Style {
+    let color = if total == 0 || healthy == total {
+        theme.ok
+    } else {
+        theme.warn
+    };
+    Style::default().fg(color)
+}
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let pf_height = if app.port_forwards.is_empty() {
@@ -32,39 +42,42 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let stats = vec![
         Line::from(vec![
             Span::styled("Nodes: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(format!("{ready_nodes}/{total_nodes} ready")),
+            Span::styled(
+                format!("{ready_nodes}/{total_nodes} ready"),
+                count_style(&app.theme, ready_nodes, total_nodes),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Pods: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(format!("{running}/{total_pods} running")),
+            Span::styled(
+                format!("{running}/{total_pods} running"),
+                count_style(&app.theme, running, total_pods),
+            ),
         ]),
         Line::from(vec![
             Span::styled(
                 "Namespaces: ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::raw(format!("{namespaces}")),
+            Span::styled(format!("{namespaces}"), Style::default().fg(app.theme.text)),
         ]),
         Line::from(vec![
             Span::styled(
                 "Warning events: ",
-                Style::default()
-                    .fg(app.theme.warn)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::raw(format!("{warnings}")),
+            Span::styled(
+                format!("{warnings}"),
+                if warnings == 0 {
+                    Style::default().fg(app.theme.ok)
+                } else {
+                    Style::default().fg(app.theme.warn)
+                },
+            ),
         ]),
     ];
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.border))
-        .title(" Cluster Overview ");
-    frame.render_widget(
-        Paragraph::new(stats)
-            .style(Style::default().fg(app.theme.text))
-            .block(block),
-        chunks[0],
-    );
+    let block = rounded_block(&app.theme, " Cluster Overview ");
+    frame.render_widget(Paragraph::new(stats).block(block), chunks[0]);
 
     if !app.port_forwards.is_empty() {
         let lines: Vec<Line> = app
@@ -72,9 +85,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             .iter()
             .map(|pf| Line::from(format!("\u{2192} {pf}")))
             .collect();
-        let pf_block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Port Forwards ");
+        let pf_block = rounded_block(&app.theme, " Port Forwards ");
         frame.render_widget(
             Paragraph::new(lines)
                 .style(Style::default().fg(app.theme.dim))
@@ -95,9 +106,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             .style(Style::default().fg(app.theme.warn))
         })
         .collect();
-    let events_block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Recent Warning Events ");
+    let events_block = rounded_block(&app.theme, " Recent Warning Events ");
     if items.is_empty() {
         frame.render_widget(
             Paragraph::new("No warning events \u{1f389}").block(events_block),

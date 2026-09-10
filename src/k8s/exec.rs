@@ -6,6 +6,7 @@ use anyhow::{Context as _, Result};
 use k8s_openapi::api::core::v1::{EphemeralContainer, Pod};
 use kube::api::{AttachParams, Patch, PatchParams};
 use kube::{Api, Client};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Attaches an interactive shell to a container and pipes it to the process's
 /// real stdin/stdout until the remote shell exits. Call this only while the
@@ -30,19 +31,52 @@ pub async fn run_interactive_shell(
     let mut remote_stdout = attached.stdout().context("no stdout on exec session")?;
     let mut remote_stdin = attached.stdin().context("no stdin on exec session")?;
 
-    // Two plain byte-copy pumps: remote output -> our stdout, our stdin ->
-    // remote input. Whichever side closes first ends its own task; the
-    // other is cleaned up once `attached.join()` returns below.
-    let stdout_task = tokio::spawn(async move {
+    // Deliberately not `tokio::io::copy`: it only flushes the writer once
+    // the *source* hits EOF, which an interactive session never does until
+    // the whole thing ends — so every byte of remote output would sit
+    // buffered and invisible until exit. Flush after every read instead.
+    let mut stdout_task = tokio::spawn(async move {
         let mut stdout = tokio::io::stdout();
-        let _ = tokio::io::copy(&mut remote_stdout, &mut stdout).await;
+        let mut buf = [0u8; 4096];
+        loop {
+            match remote_stdout.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if stdout.write_all(&buf[..n]).await.is_err() || stdout.flush().await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
     });
     let stdin_task = tokio::spawn(async move {
         let mut stdin = tokio::io::stdin();
-        let _ = tokio::io::copy(&mut stdin, &mut remote_stdin).await;
+        let mut buf = [0u8; 4096];
+        loop {
+            match stdin.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if remote_stdin.write_all(&buf[..n]).await.is_err()
+                        || remote_stdin.flush().await.is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        }
     });
 
-    let _ = attached.join().await;
+    // `attached.join()` is meant to signal "the remote process is done",
+    // but in practice it can hang well past that point (observed against a
+    // real cluster: it never resolved after the remote shell had already
+    // exited and closed its output). The stdout pump ending — remote
+    // closed its output, i.e. the process is gone — is the signal we
+    // actually care about, so race the two instead of trusting join()
+    // alone; whichever concludes first ends the session.
+    tokio::select! {
+        _ = &mut stdout_task => {}
+        _ = attached.join() => {}
+    }
     stdout_task.abort();
     stdin_task.abort();
     Ok(())
@@ -77,7 +111,40 @@ pub async fn add_debug_container(
         .await
         .context("adding ephemeral debug container")?;
 
+    wait_until_running(&api, pod, &name).await?;
+
     Ok(name)
+}
+
+/// The apiserver accepts an exec request for a container the instant it
+/// exists in the spec, but actually attaching fails with a 500 until the
+/// kubelet has pulled the image and started it — so poll status until the
+/// named (ephemeral) container reports `running`, instead of racing it.
+async fn wait_until_running(api: &Api<Pod>, pod: &str, container_name: &str) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let current = api
+            .get(pod)
+            .await
+            .context("polling debug container status")?;
+        let running = current
+            .status
+            .as_ref()
+            .and_then(|s| s.ephemeral_container_statuses.as_ref())
+            .into_iter()
+            .flatten()
+            .any(|c| {
+                c.name == container_name && c.state.as_ref().is_some_and(|s| s.running.is_some())
+            });
+        if running {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "debug container '{container_name}' did not start within 60s"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
 }
 
 /// A short, good-enough-to-avoid-collisions suffix for debug container names.

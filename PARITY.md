@@ -63,6 +63,55 @@ not just detail:
   status check rather than a `build` prerequisite since a live cluster is
   slower and flakier than the rest of the pipeline.
 
+## Manual verification against a real cluster
+
+Automated tests don't cover everything — interactive exec/attach behavior
+(raw-mode handling, echo, output flushing, keystroke routing during a shell
+session) isn't meaningfully unit-testable and CI's kind+kwok job doesn't
+drive the actual TUI, only the library functions underneath it. Those paths
+were exercised directly against a real cluster (via `tmux send-keys` +
+`capture-pane`, driving the compiled binary as a real interactive program),
+which found and fixed several real bugs the automated suite couldn't have
+caught:
+
+- **Selection followed list index, not item identity.** A refresh could
+  return the same nodes/pods in a different order (observed live), silently
+  moving the highlight onto a different resource than the one selected —
+  dangerous for `d`/`D` (drain/delete). Fixed by tracking selection as a
+  `(kind, namespace, name)` identity (`app::ItemRef`) resolved against the
+  current list every render (`App::resolve_selection`), covered by
+  regression tests in `src/app.rs`.
+- **Remote shell output never appeared.** `run_interactive_shell` used
+  `tokio::io::copy`, which only flushes its writer when the *source* hits
+  EOF — never true for a live interactive stream — so command output sat
+  buffered and invisible until the session ended. Fixed with an explicit
+  read/write/flush loop.
+- **Double echo and broken control keys in an attached shell.** The local
+  terminal was dropped out of raw mode for the shell session, so the local
+  tty's own canonical-mode echo doubled up with the remote pty's echo, and
+  Ctrl-C/Ctrl-D stopped behaving as raw bytes. Fixed by keeping raw mode on
+  throughout — only the alternate screen is left/re-entered.
+- **Exiting an attached shell could hang the whole app.** `attached.join()`
+  was observed to never resolve after the remote process had already exited
+  and closed its output. Fixed by racing it against the stdout pump ending
+  (a closed remote stdout is the actually-reliable "the process is gone"
+  signal).
+- **Keystrokes leaked between an attached shell and the TUI.** The
+  always-running crossterm input reader and the shell's own raw stdin pump
+  both read the same fd at once, splitting keystrokes unpredictably and
+  queuing whatever the TUI reader grabbed to fire the instant control
+  returned — capable of misdirecting to destructive keys (`d`/`D`, `q`).
+  Fixed by stopping the crossterm reader before an exec session starts and
+  restarting it after.
+- **Debug container exec raced the container starting.** Execing
+  immediately after the ephemeral-container patch succeeded could hit the
+  container before the kubelet had actually started it (`500` from the
+  apiserver). Fixed by polling pod status for `running` first.
+- Two cosmetic layout bugs: the splash logo overflowing its fixed-height
+  layout region and colliding with the box below it (now sized from the
+  logo text itself), and a namespace-filter label truncating in a
+  20-column-wide panel (moved to the top bar, which has room).
+
 ## Keeping up with upstream
 
 `.github/workflows/upstream-watch.yml` runs weekly (and on demand), checks

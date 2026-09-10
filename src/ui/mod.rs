@@ -8,11 +8,23 @@ mod workloads;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Tabs};
 use ratatui::Frame;
 
 use crate::app::{App, Screen, MAIN_SCREENS};
 use crate::logo::{LOGO_BADGE, LOGO_LARGE};
+use crate::theme::Theme;
+
+/// A bordered block in the app's consistent style — rounded corners, tinted
+/// to the current cluster's theme. Shared so every screen looks like part
+/// of the same app instead of each picking its own border.
+pub(super) fn rounded_block(theme: &Theme, title: impl Into<String>) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .title(title.into())
+}
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.screen == Screen::ContextPicker {
@@ -38,7 +50,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Screen::Logs => logs::draw(frame, app, chunks[1]),
         Screen::ObjectMap => objectmap::draw(frame, app, chunks[1]),
         Screen::Compare => compare::draw(frame, app, chunks[1]),
-        Screen::Help => draw_help(frame, chunks[1]),
+        Screen::Help => draw_help(frame, app, chunks[1]),
         Screen::ContextPicker => unreachable!(),
     }
 
@@ -69,10 +81,8 @@ fn draw_debug_prompt(frame: &mut Frame, app: &App, area: Rect) {
         "Debug container image for {}/{}:\n\n> {}\n\n(Enter to launch + attach, Esc to cancel)",
         prompt.namespace, prompt.pod, prompt.image
     );
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.accent))
-        .title(" Launch Debug Container ");
+    let block = rounded_block(&app.theme, " Launch Debug Container ")
+        .border_style(Style::default().fg(app.theme.accent));
     frame.render_widget(Paragraph::new(text).block(block), popup);
 }
 
@@ -89,15 +99,24 @@ fn draw_tabs(frame: &mut Frame, app: &App, area: Rect) {
         .current_context_name
         .clone()
         .unwrap_or_else(|| "(no context)".into());
+    let ns_label = app.namespace_filter.as_deref().unwrap_or("all namespaces");
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(app.theme.accent))
         .title(Span::styled(
             format!(" Luxury TUI · {context_name} "),
             Style::default()
                 .fg(app.theme.accent)
                 .add_modifier(Modifier::BOLD),
-        ));
+        ))
+        .title_top(
+            Line::from(Span::styled(
+                format!(" ns: {ns_label} "),
+                Style::default().fg(app.theme.dim),
+            ))
+            .right_aligned(),
+        );
     let tabs = Tabs::new(titles)
         .block(block)
         .select(selected)
@@ -131,7 +150,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(text).style(style), area);
 }
 
-fn draw_help(frame: &mut Frame, area: Rect) {
+fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
     let help = format!(
         "{LOGO_BADGE}\n\
 Navigation
@@ -161,16 +180,19 @@ Navigation
   q / Esc              quit / back
 "
     );
-    let block = Block::default().borders(Borders::ALL).title(" Help ");
+    let block = rounded_block(&app.theme, " Help ");
     frame.render_widget(Paragraph::new(help).block(block), area);
 }
 
 fn draw_context_picker(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
+    // Sized from the actual logo text so a future redesign can't silently
+    // overflow this chunk and overlap the list below it again.
+    let logo_height = LOGO_LARGE.lines().count() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(14),
+            Constraint::Length(logo_height),
             Constraint::Min(3),
             Constraint::Length(3),
         ])
@@ -214,9 +236,10 @@ fn draw_context_picker(frame: &mut Frame, app: &mut App) {
             })
             .collect()
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Select a cluster context (\u{2191}/\u{2193}, Enter) ");
+    let block = rounded_block(
+        &app.theme,
+        " Select a cluster context (\u{2191}/\u{2193}, Enter) ",
+    );
     frame.render_widget(Paragraph::new(items).block(block), chunks[1]);
 
     let footer = Paragraph::new(

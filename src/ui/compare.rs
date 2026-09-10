@@ -1,17 +1,18 @@
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::app::App;
 use crate::k8s::diff::DiffLine;
+use crate::ui::rounded_block;
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title(" Compare ");
+    let block = rounded_block(&app.theme, " Compare ");
     if app.compare.diff.is_empty() {
         frame.render_widget(
-            Paragraph::new("No comparison loaded yet. On the Pods list, press 'v' on one pod, then 'v' on another to diff them.").block(block),
+            Paragraph::new("No comparison loaded yet. On the Workloads list, press 'v' on one item, then 'v' on another of the same kind to diff them.").block(block),
             area,
         );
         return;

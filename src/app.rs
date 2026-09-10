@@ -121,19 +121,22 @@ impl Default for LogViewerState {
     }
 }
 
-/// Identifies one resource to diff — any kind we know how to fetch (see
-/// `k8s::diff::compare_resources`), not just pods.
+/// Identifies one resource by kind/namespace/name — used both to remember
+/// the current Workloads-screen selection across refreshes and to name a
+/// diff target (see `k8s::diff::compare_resources`). `kind` matches
+/// `WorkloadKind::api_kind()`; `namespace` is empty for cluster-scoped
+/// kinds (Node).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompareRef {
+pub struct ItemRef {
     pub kind: String,
-    pub namespace: String, // empty for cluster-scoped kinds (Node)
+    pub namespace: String,
     pub name: String,
 }
 
 #[derive(Default)]
 pub struct CompareState {
-    pub left: Option<CompareRef>,
-    pub right: Option<CompareRef>,
+    pub left: Option<ItemRef>,
+    pub right: Option<ItemRef>,
     pub diff: Vec<DiffLine>,
 }
 
@@ -169,6 +172,13 @@ pub struct App {
     pub pods: Vec<PodSummary>,
     pub nodes: Vec<NodeSummary>,
     pub workloads_cache: HashMap<&'static str, Vec<WorkloadSummary>>,
+    /// Identity of the currently-selected Workloads/Attention row — kept
+    /// stable across list refreshes even when the underlying API returns
+    /// items in a different order (which it does, sometimes). This is the
+    /// source of truth; `workload_list_state`'s index is recomputed from
+    /// it every render via `resolve_selection` and exists only because
+    /// ratatui's stateful `List` widget needs one.
+    pub selected: Option<ItemRef>,
     pub workload_list_state: ListState,
 
     pub events: Vec<EventSummary>,
@@ -211,6 +221,7 @@ impl App {
             pods: vec![],
             nodes: vec![],
             workloads_cache: HashMap::new(),
+            selected: None,
             workload_list_state: ListState::default(),
             events: vec![],
             logs: LogViewerState::default(),
@@ -276,6 +287,53 @@ impl App {
                 .unwrap_or_default(),
         }
     }
+
+    /// The identity of every row rendered on the Workloads/Attention screen
+    /// right now, in display order. `attention_only` selects the Attention
+    /// screen's filtered pod list instead of the current workload kind's
+    /// full list — the two can have different lengths, so bounding
+    /// selection movement or resolving "what's highlighted" against the
+    /// wrong one silently targets the wrong item.
+    pub fn visible_item_refs(&self, attention_only: bool) -> Vec<ItemRef> {
+        if attention_only {
+            return crate::k8s::resources::filter_attention(&self.pods)
+                .iter()
+                .map(|p| ItemRef {
+                    kind: "Pod".into(),
+                    namespace: p.namespace.clone(),
+                    name: p.name.clone(),
+                })
+                .collect();
+        }
+        self.active_workloads()
+            .iter()
+            .map(|w| ItemRef {
+                kind: w.kind.to_string(),
+                namespace: w.namespace.clone(),
+                name: w.name.clone(),
+            })
+            .collect()
+    }
+
+    /// Finds `self.selected` in `refs` and returns its index. If it's not
+    /// there — nothing was selected yet, the list reordered and lost it,
+    /// or the item itself is gone — falls back to index 0 and adopts *that*
+    /// row's identity, so a stale reference never silently survives as the
+    /// active selection. Returns `None` only when `refs` is empty.
+    pub fn resolve_selection(&mut self, refs: &[ItemRef]) -> Option<usize> {
+        if let Some(sel) = &self.selected {
+            if let Some(idx) = refs.iter().position(|r| r == sel) {
+                return Some(idx);
+            }
+        }
+        if refs.is_empty() {
+            self.selected = None;
+            None
+        } else {
+            self.selected = Some(refs[0].clone());
+            Some(0)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -311,5 +369,53 @@ mod tests {
         // workloads silently stop showing up.
         assert_eq!(WorkloadKind::Deployments.api_kind(), "Deployment");
         assert_eq!(WorkloadKind::CronJobs.api_kind(), "CronJob");
+    }
+
+    fn item(name: &str) -> ItemRef {
+        ItemRef {
+            kind: "Pod".into(),
+            namespace: "default".into(),
+            name: name.into(),
+        }
+    }
+
+    #[test]
+    fn resolve_selection_follows_an_item_across_a_reorder() {
+        // Regression test: a background refresh can come back with the
+        // same items in a different order (observed against a real
+        // cluster). Selection must follow the *item*, not the slot.
+        let mut app = App::new(Config::default());
+        let before = [item("a"), item("b"), item("c")];
+        assert_eq!(app.resolve_selection(&before), Some(0));
+
+        app.selected = Some(item("b"));
+        let after_reorder = [item("c"), item("b"), item("a")];
+        assert_eq!(
+            app.resolve_selection(&after_reorder),
+            Some(1),
+            "selection should follow 'b' to its new slot, not stay at index 0"
+        );
+        assert_eq!(app.selected, Some(item("b")));
+    }
+
+    #[test]
+    fn resolve_selection_falls_back_to_first_row_when_selection_is_gone() {
+        let mut app = App::new(Config::default());
+        app.selected = Some(item("deleted"));
+        let refs = [item("a"), item("b")];
+        assert_eq!(app.resolve_selection(&refs), Some(0));
+        assert_eq!(
+            app.selected,
+            Some(item("a")),
+            "must adopt the fallback row's identity, not keep pointing at the gone one"
+        );
+    }
+
+    #[test]
+    fn resolve_selection_on_empty_list_clears_selection() {
+        let mut app = App::new(Config::default());
+        app.selected = Some(item("a"));
+        assert_eq!(app.resolve_selection(&[]), None);
+        assert_eq!(app.selected, None);
     }
 }

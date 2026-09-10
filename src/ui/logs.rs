@@ -1,10 +1,11 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::App;
+use crate::ui::rounded_block;
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
@@ -59,7 +60,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         .map(|raw| highlight_line(display_text(app, raw), &app.logs.search))
         .collect();
 
-    let block = Block::default().borders(Borders::ALL).title(" Logs ");
+    let block = rounded_block(&app.theme, " Logs ");
     frame.render_widget(
         Paragraph::new(visible)
             .block(block)

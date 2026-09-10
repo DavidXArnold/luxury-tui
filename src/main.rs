@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let (tx, mut rx) = event::channel();
-    spawn_input_forwarder(tx.clone());
+    let mut input_forwarder = spawn_input_forwarder(tx.clone());
     spawn_ticker(tx.clone(), Duration::from_millis(500));
 
     // Kick off kubeconfig discovery.
@@ -64,7 +64,8 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let result = run(&mut terminal, &mut app, tx, &mut rx).await;
+    let result = run(&mut terminal, &mut app, tx, &mut rx, &mut input_forwarder).await;
+    input_forwarder.abort();
 
     disable_raw_mode()?;
     execute!(
@@ -104,6 +105,7 @@ async fn run(
     app: &mut App,
     tx: event::EventSender,
     rx: &mut event::EventReceiver,
+    input_forwarder: &mut tokio::task::JoinHandle<()>,
 ) -> anyhow::Result<()> {
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
@@ -112,8 +114,31 @@ async fn run(
         handle_event(app, &tx, evt).await;
 
         if let Some((namespace, pod, container)) = app.pending_shell.take() {
-            disable_raw_mode().ok();
-            execute!(terminal.backend_mut(), LeaveAlternateScreen).ok();
+            // Stop the crossterm event reader before touching stdin
+            // ourselves: it and our own raw read loop would otherwise both
+            // be reading the same fd at once, splitting keystrokes between
+            // "goes to the remote shell" and "queues up as a TUI command,
+            // to fire the instant we get control back" pretty much at
+            // random. Wait for it to actually stop (abort() only requests
+            // cancellation) before proceeding.
+            input_forwarder.abort();
+            let _ = (&mut *input_forwarder).await;
+
+            // Leave the alternate screen so the remote shell's own output
+            // isn't fighting ratatui's, but keep raw mode ON throughout:
+            // turning it off (as this used to) hands input to the local
+            // tty's line-buffered/canonical mode, which echoes locally on
+            // top of the remote pty's own echo — every line shows up
+            // doubled and control keys stop working as expected. Real
+            // terminal passthrough (ssh, `kubectl exec -it`) always keeps
+            // raw mode on and lets the *remote* pty be the only thing
+            // echoing.
+            execute!(
+                terminal.backend_mut(),
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            )
+            .ok();
             if let Some(client) = app.client.clone() {
                 let shell = pick_shell();
                 if let Err(e) = k8s::exec::run_interactive_shell(
@@ -128,9 +153,14 @@ async fn run(
                     app.set_status(format!("exec failed: {e:#}"));
                 }
             }
-            enable_raw_mode().ok();
-            execute!(terminal.backend_mut(), EnterAlternateScreen).ok();
+            execute!(
+                terminal.backend_mut(),
+                EnterAlternateScreen,
+                EnableMouseCapture
+            )
+            .ok();
             terminal.clear().ok();
+            *input_forwarder = spawn_input_forwarder(tx.clone());
         }
 
         if app.should_quit {
@@ -493,17 +523,21 @@ fn cycle_kind(app: &mut App, delta: i32) {
     let len = WORKLOAD_KINDS.len() as i32;
     let next = ((idx + delta) % len + len) % len;
     app.workload_kind = WORKLOAD_KINDS[next as usize];
-    app.workload_list_state.select(Some(0));
+    // Let the next render pick index 0 of the new kind's list — trying to
+    // guess an index here would just be trusting a number that's about to
+    // mean something completely different anyway.
+    app.selected = None;
 }
 
 fn move_selection(app: &mut App, delta: i32) {
-    let len = app.active_workloads().len();
-    if len == 0 {
+    let attention_only = app.screen == Screen::Attention;
+    let refs = app.visible_item_refs(attention_only);
+    if refs.is_empty() {
         return;
     }
-    let current = app.workload_list_state.selected().unwrap_or(0) as i32;
-    let next = ((current + delta).max(0) as usize).min(len - 1);
-    app.workload_list_state.select(Some(next));
+    let current = app.resolve_selection(&refs).unwrap_or(0) as i32;
+    let next = ((current + delta).max(0) as usize).min(refs.len() - 1);
+    app.selected = Some(refs[next].clone());
 }
 
 /// 'v' on any workload list: first press marks the "left" side of a
@@ -546,29 +580,30 @@ fn mark_for_compare(app: &mut App, tx: &event::EventSender) {
 }
 
 /// The row currently selected on the Workloads/Attention screen, as a
-/// compare target — works for any kind (Pods, Deployments, Nodes, ...),
-/// since `active_workloads()` is what's actually rendered there.
-fn selected_workload_ref(app: &App) -> Option<app::CompareRef> {
-    let idx = app.workload_list_state.selected()?;
-    let row = app.active_workloads().into_iter().nth(idx)?;
-    Some(app::CompareRef {
-        kind: row.kind.to_string(),
-        namespace: row.namespace,
-        name: row.name,
-    })
+/// compare target — works for any kind (Pods, Deployments, Nodes, ...).
+/// `app.selected` is the identity resolved at the last render, so this is
+/// safe to trust even if the underlying list has since been re-fetched.
+fn selected_workload_ref(app: &App) -> Option<app::ItemRef> {
+    app.selected.clone()
 }
 
 fn selected_pod(app: &App) -> Option<crate::k8s::resources::PodSummary> {
-    if app.workload_kind != WorkloadKind::Pods {
+    let sel = app.selected.as_ref()?;
+    if sel.kind != "Pod" {
         return None;
     }
-    let idx = app.workload_list_state.selected()?;
-    app.pods.get(idx).cloned()
+    app.pods
+        .iter()
+        .find(|p| p.namespace == sel.namespace && p.name == sel.name)
+        .cloned()
 }
 
 fn selected_node(app: &App) -> Option<crate::k8s::resources::NodeSummary> {
-    let idx = app.workload_list_state.selected()?;
-    app.nodes.get(idx).cloned()
+    let sel = app.selected.as_ref()?;
+    if sel.kind != "Node" {
+        return None;
+    }
+    app.nodes.iter().find(|n| n.name == sel.name).cloned()
 }
 
 fn start_logs_for(app: &mut App, tx: &event::EventSender, namespace: String, pod: String) {

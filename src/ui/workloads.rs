@@ -1,10 +1,12 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, Borders, List, ListItem};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{List, ListItem, ListState};
 use ratatui::Frame;
 
 use crate::app::{App, Screen, WORKLOAD_KINDS};
 use crate::k8s::resources::filter_attention;
+use crate::ui::rounded_block;
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
@@ -35,21 +37,33 @@ fn draw_kind_list(frame: &mut Frame, app: &App, area: Rect) {
             ListItem::new(k.label()).style(style)
         })
         .collect();
-    let ns = app
-        .namespace_filter
-        .clone()
-        .unwrap_or_else(|| "all".to_string());
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" Kinds (ns: {ns}) "));
+    // The namespace filter is shown in the top bar (right-aligned title) —
+    // this panel is too narrow (Length(20)) to also fit a namespace name
+    // without truncating it.
+    let block = rounded_block(&app.theme, " Kinds ");
     frame.render_widget(List::new(items).block(block), area);
 }
 
 fn draw_namespace_summary(frame: &mut Frame, app: &App, area: Rect) {
     let attention_count = filter_attention(&app.pods).len();
-    let block = Block::default().borders(Borders::ALL).title(" Attention ");
+    let block = rounded_block(&app.theme, " Attention ");
     let text = format!("{attention_count} pod(s)\nneed attention");
     frame.render_widget(ratatui::widgets::Paragraph::new(text).block(block), area);
+}
+
+/// A `phase-word` + rest-of-line row, colored by what the phase word means
+/// (Running=ok, Pending=warn, Failed=error, ...) instead of one flat color
+/// for the whole line.
+fn phase_row(
+    theme: &crate::theme::Theme,
+    phase: &str,
+    phase_width: usize,
+    rest: String,
+) -> ListItem<'static> {
+    ListItem::new(Line::from(vec![
+        Span::styled(format!("{phase:<phase_width$} "), theme.phase_style(phase)),
+        Span::raw(rest),
+    ]))
 }
 
 fn draw_items(frame: &mut Frame, app: &mut App, area: Rect, attention_only: bool) {
@@ -63,11 +77,15 @@ fn draw_items(frame: &mut Frame, app: &mut App, area: Rect, attention_only: bool
         filter_attention(&app.pods)
             .iter()
             .map(|p| {
-                ListItem::new(format!(
-                    "{:<10} {}/{:<20} {:<3}/{:<3} restarts={}",
-                    p.phase, p.namespace, p.name, p.ready.0, p.ready.1, p.restarts
-                ))
-                .style(Style::default().fg(app.theme.error))
+                phase_row(
+                    &app.theme,
+                    &p.phase,
+                    10,
+                    format!(
+                        "{}/{:<20} {:<3}/{:<3} restarts={}",
+                        p.namespace, p.name, p.ready.0, p.ready.1, p.restarts
+                    ),
+                )
             })
             .collect()
     } else if app.workload_kind == crate::app::WorkloadKind::Nodes {
@@ -76,10 +94,8 @@ fn draw_items(frame: &mut Frame, app: &mut App, area: Rect, attention_only: bool
             .map(|n| {
                 let status = if n.ready { "Ready" } else { "NotReady" };
                 let sched = if n.schedulable { "" } else { " (cordoned)" };
-                ListItem::new(format!(
-                    "{:<20} {:<10} {:<20} {}{}",
-                    n.name, status, n.roles, n.version, sched
-                ))
+                let rest = format!("{:<20} {:<20} {}{}", n.name, n.roles, n.version, sched);
+                phase_row(&app.theme, status, 10, rest)
             })
             .collect()
     } else if app.workload_kind == crate::app::WorkloadKind::Pods {
@@ -91,9 +107,8 @@ fn draw_items(frame: &mut Frame, app: &mut App, area: Rect, attention_only: bool
                     _ => "-".to_string(),
                 };
                 let node = p.node.as_deref().unwrap_or("-");
-                ListItem::new(format!(
-                    "{:<10} {}/{:<20} {:<3}/{:<3} {:<28} {:<16} {}",
-                    p.phase,
+                let rest = format!(
+                    "{}/{:<20} {:<3}/{:<3} {:<28} {:<16} {}",
                     p.namespace,
                     p.name,
                     p.ready.0,
@@ -101,23 +116,39 @@ fn draw_items(frame: &mut Frame, app: &mut App, area: Rect, attention_only: bool
                     owner,
                     node,
                     format_age(p.age_seconds)
-                ))
+                );
+                phase_row(&app.theme, &p.phase, 10, rest)
             })
             .collect()
     } else {
         app.active_workloads()
             .iter()
             .map(|w| {
-                ListItem::new(format!(
-                    "{:<12} {:<20} {:<20} {}",
-                    w.kind, w.namespace, w.name, w.ready
-                ))
+                // `ready` here is a count like "2/3", not a phase word —
+                // color it green when fully ready, yellow otherwise.
+                let fully_ready = w
+                    .ready
+                    .split_once('/')
+                    .is_some_and(|(a, b)| !a.is_empty() && a == b);
+                let ready_style = if fully_ready {
+                    Style::default().fg(app.theme.ok)
+                } else {
+                    Style::default().fg(app.theme.warn)
+                };
+                ListItem::new(Line::from(vec![
+                    Span::raw(format!(
+                        "{:<12} {:<20} {:<20} ",
+                        w.kind, w.namespace, w.name
+                    )),
+                    Span::styled(w.ready.clone(), ready_style),
+                ]))
             })
             .collect()
     };
 
-    let block = Block::default().borders(Borders::ALL).title(title);
+    let block = rounded_block(&app.theme, title);
     if rows.is_empty() {
+        app.selected = None;
         frame.render_widget(
             ratatui::widgets::Paragraph::new("(nothing here \u{2014} press r to refresh)")
                 .block(block),
@@ -126,10 +157,15 @@ fn draw_items(frame: &mut Frame, app: &mut App, area: Rect, attention_only: bool
         return;
     }
 
-    let mut state = app.workload_list_state.clone();
-    if state.selected().is_none() {
-        state.select(Some(0));
-    }
+    // Resolve the selection by identity, not by trusting a stale index —
+    // the API can (and does) return the same items in a different order
+    // between refreshes, which would otherwise silently move the highlight
+    // onto a different resource than the one the user actually picked.
+    let refs = app.visible_item_refs(attention_only);
+    let selected_idx = app.resolve_selection(&refs);
+    let mut state = ListState::default();
+    state.select(selected_idx);
+
     let list = List::new(rows).block(block).highlight_style(
         Style::default()
             .fg(app.theme.accent)

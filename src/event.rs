@@ -43,7 +43,14 @@ pub fn channel() -> (EventSender, EventReceiver) {
 
 /// Bridges crossterm's terminal input into the same event channel the async
 /// k8s tasks report back on, so the main loop only needs one `select!`.
-pub fn spawn_input_forwarder(tx: EventSender) {
+///
+/// Returns the task's handle so the caller can `abort()` it before anything
+/// else reads stdin directly — an interactive exec session, for one. Two
+/// readers racing the same fd split keystrokes between them unpredictably,
+/// and whatever this one grabs sits queued for the main loop to fire off,
+/// all at once, the moment it gets control back. Always stop this first,
+/// then start a fresh one afterward with `spawn_input_forwarder` again.
+pub fn spawn_input_forwarder(tx: EventSender) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         use crossterm::event::EventStream;
         use futures::StreamExt;
@@ -53,7 +60,7 @@ pub fn spawn_input_forwarder(tx: EventSender) {
                 break;
             }
         }
-    });
+    })
 }
 
 pub fn spawn_ticker(tx: EventSender, period: std::time::Duration) {

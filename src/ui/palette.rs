@@ -1,10 +1,11 @@
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
+use crate::ui::rounded_block;
 
 pub const ACTIONS: &[&str] = &[
     "goto overview",
@@ -54,9 +55,8 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
 
     let input = Paragraph::new(format!("> {}", app.palette.query))
         .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Command Palette "),
+            rounded_block(&app.theme, " Command Palette ")
+                .border_style(Style::default().fg(app.theme.accent)),
         )
         .alignment(Alignment::Left);
     frame.render_widget(input, chunks[0]);
@@ -77,7 +77,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
     frame.render_widget(
-        List::new(items).block(Block::default().borders(Borders::ALL)),
+        List::new(items).block(rounded_block(&app.theme, "")),
         chunks[1],
     );
 }
