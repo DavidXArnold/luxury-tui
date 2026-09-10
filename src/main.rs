@@ -39,28 +39,23 @@ async fn main() -> anyhow::Result<()> {
     let mut input_forwarder = spawn_input_forwarder(tx.clone());
     spawn_ticker(tx.clone(), Duration::from_millis(500));
 
-    // Kick off kubeconfig discovery.
+    // Kick off kubeconfig discovery: scans ~/.kube (or $KUBECONFIG, or our
+    // own config override) for every file that looks like a kubeconfig —
+    // plain filesystem work, so run it on a blocking-friendly thread
+    // rather than tying up an async worker.
     {
         let tx = tx.clone();
-        let explicit = app.config.kubeconfig_path.clone();
-        tokio::spawn(async move {
-            let result = k8s::context::load_kubeconfig(explicit.as_deref()).map(|kc| {
-                let contexts = k8s::context::list_contexts(&kc);
-                (kc, contexts)
-            });
-            match result {
-                Ok((kc, contexts)) => {
-                    let _ = tx.send(AppEvent::ContextsLoaded(Ok(contexts.clone())));
-                    // Stash kubeconfig by sending it through a side channel isn't
-                    // possible with this enum shape, so we reload it lazily in
-                    // the main loop via a OnceLock-free approach: store on App
-                    // directly by piggybacking on ContextsLoaded handling below.
-                    KUBECONFIG.set(kc).ok();
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::ContextsLoaded(Err(e)));
-                }
-            }
+        let explicit = app.config.kubeconfig_search_paths.clone();
+        tokio::task::spawn_blocking(move || {
+            let explicit = (!explicit.is_empty()).then_some(explicit.as_slice());
+            k8s::context::discover(explicit)
+        })
+        .await
+        .map(|discovered| {
+            let _ = tx.send(AppEvent::ContextsLoaded(Ok(discovered)));
+        })
+        .unwrap_or_else(|e| {
+            let _ = tx.send(AppEvent::ContextsLoaded(Err(anyhow::anyhow!(e))));
         });
     }
 
@@ -80,10 +75,6 @@ async fn main() -> anyhow::Result<()> {
     }
     result
 }
-
-/// Small escape hatch: `Kubeconfig` isn't `Copy`/cheap to shuttle through the
-/// event enum repeatedly, and we only ever load it once at startup.
-static KUBECONFIG: std::sync::OnceLock<kube::config::Kubeconfig> = std::sync::OnceLock::new();
 
 fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let dir = directories::ProjectDirs::from("dev", "luxury-tui", "luxury-tui")?
@@ -182,9 +173,20 @@ async fn handle_event(app: &mut App, tx: &event::EventSender, evt: AppEvent) {
         AppEvent::Term(_) => {}
         AppEvent::Tick => {}
 
-        AppEvent::ContextsLoaded(Ok(contexts)) => {
-            app.contexts = contexts;
-            app.set_status(format!("loaded {} context(s)", app.contexts.len()));
+        AppEvent::ContextsLoaded(Ok(discovered)) => {
+            app.contexts = discovered.contexts;
+            app.kubeconfig_files = discovered.files;
+            let invalid = app.contexts.iter().filter(|c| c.invalid).count();
+            let extra = if invalid > 0 {
+                format!(" ({invalid} invalid)")
+            } else {
+                String::new()
+            };
+            app.set_status(format!(
+                "found {} context(s) across {} file(s){extra}",
+                app.contexts.len(),
+                app.kubeconfig_files.len()
+            ));
         }
         AppEvent::ContextsLoaded(Err(e)) => {
             app.set_status(format!("failed to load kubeconfig: {e:#}"));
@@ -387,7 +389,15 @@ fn handle_context_picker_key(
         }
         KeyCode::Enter => {
             if let Some(ctx) = app.contexts.get(app.context_selected).cloned() {
-                let Some(kubeconfig) = KUBECONFIG.get().cloned() else {
+                if ctx.invalid {
+                    app.set_status(format!(
+                        "context '{}' looks broken: {}",
+                        ctx.name,
+                        ctx.invalid_reason.as_deref().unwrap_or("invalid")
+                    ));
+                    return;
+                }
+                let Some(kubeconfig) = app.kubeconfig_files.get(&ctx.source_path).cloned() else {
                     app.set_status("kubeconfig not loaded yet");
                     return;
                 };

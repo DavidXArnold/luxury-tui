@@ -205,7 +205,7 @@ fn draw_context_picker(frame: &mut Frame, app: &mut App) {
 
     let items: Vec<Line> = if app.contexts.is_empty() {
         vec![Line::from(
-            "No contexts found in kubeconfig. Press q to quit.",
+            "No kubeconfig files found (checked $KUBECONFIG / ~/.kube). Press q to quit.",
         )]
     } else {
         app.contexts
@@ -217,8 +217,16 @@ fn draw_context_picker(frame: &mut Frame, app: &mut App) {
                 } else {
                     "  "
                 };
-                let current = if ctx.is_current { " (current)" } else { "" };
-                let style = if i == app.context_selected {
+                let mut tags = String::new();
+                if ctx.is_current {
+                    tags.push_str(" (current)");
+                }
+                if ctx.is_default_file {
+                    tags.push_str(" (default)");
+                }
+                let style = if ctx.invalid {
+                    Style::default().fg(app.theme.error)
+                } else if i == app.context_selected {
                     Style::default()
                         .fg(app.theme.accent)
                         .add_modifier(Modifier::BOLD)
@@ -226,10 +234,15 @@ fn draw_context_picker(frame: &mut Frame, app: &mut App) {
                     Style::default()
                 };
                 let default_ns = ctx.namespace.as_deref().unwrap_or("default");
+                let invalid_note = ctx
+                    .invalid_reason
+                    .as_deref()
+                    .map(|r| format!("  \u{26a0} {r}"))
+                    .unwrap_or_default();
                 Line::from(Span::styled(
                     format!(
-                        "{marker}{}  cluster={} user={} ns={}{}",
-                        ctx.name, ctx.cluster, ctx.user, default_ns, current
+                        "{marker}[{}] {}  cluster={} user={} ns={}{tags}{invalid_note}",
+                        ctx.source_display, ctx.name, ctx.cluster, ctx.user, default_ns
                     ),
                     style,
                 ))

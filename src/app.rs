@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use ratatui::widgets::ListState;
 
 use crate::config::Config;
-use crate::k8s::context::KubeContext;
+use crate::k8s::context::{KubeContext, KubeconfigsByPath};
 use crate::k8s::diff::DiffLine;
 use crate::k8s::objectmap::MapNode;
 use crate::k8s::resources::{EventSummary, NodeSummary, PodSummary, WorkloadSummary};
@@ -156,6 +156,10 @@ pub struct ObjectMapState {
 pub struct App {
     pub config: Config,
     pub contexts: Vec<KubeContext>,
+    /// The parsed kubeconfig each discovered context came from, keyed by
+    /// its resolved file path — looked up when a context is picked, since
+    /// building a client needs the *specific* file, not just the name.
+    pub kubeconfig_files: KubeconfigsByPath,
     pub context_selected: usize,
     pub client: Option<Client>,
     pub current_context_name: Option<String>,
@@ -208,6 +212,7 @@ impl App {
         App {
             config,
             contexts: vec![],
+            kubeconfig_files: HashMap::new(),
             context_selected: 0,
             client: None,
             current_context_name: None,

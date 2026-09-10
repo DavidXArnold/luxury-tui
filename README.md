@@ -62,8 +62,10 @@ reliably inside a terminal), shown on the context-picker screen at startup:
 
 ## Features
 
-- **Zero-config setup** — auto-detects `$KUBECONFIG` / `~/.kube/config`,
-  lists every context, connects on selection.
+- **Zero-config setup** — scans `~/.kube` for *any* file that looks like a
+  kubeconfig (not just one literally named `config`), same as Luxury Yacht;
+  `$KUBECONFIG` is honored too. Lists every context across every file it
+  finds, connects on selection.
 - **Cluster overview** — node/pod health at a glance, recent warning events.
 - **Workload browser** — Pods, Deployments, StatefulSets, DaemonSets,
   ReplicaSets, Jobs, CronJobs, Services, and Nodes, filterable by namespace.

@@ -14,9 +14,11 @@ pub struct Config {
     /// context name -> palette name
     #[serde(default)]
     pub context_palettes: HashMap<String, String>,
-    /// Explicit kubeconfig path override (defaults to KUBECONFIG / ~/.kube/config).
+    /// Explicit kubeconfig search paths, overriding both `$KUBECONFIG` and
+    /// the default `~/.kube` directory scan. Each entry can be a specific
+    /// file or a directory to scan (see `k8s::context::discover`).
     #[serde(default)]
-    pub kubeconfig_path: Option<PathBuf>,
+    pub kubeconfig_search_paths: Vec<PathBuf>,
     #[serde(default)]
     pub log_line_buffer: Option<usize>,
 }

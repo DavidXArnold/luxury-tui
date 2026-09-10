@@ -3,14 +3,14 @@ use kube::Client;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::k8s::{
-    context::KubeContext, diff::DiffLine, nodes::DrainOutcome, objectmap::MapNode, resources::*,
+    context::Discovered, diff::DiffLine, nodes::DrainOutcome, objectmap::MapNode, resources::*,
 };
 
 pub enum AppEvent {
     Term(crossterm::event::Event),
     Tick,
 
-    ContextsLoaded(Result<Vec<KubeContext>>),
+    ContextsLoaded(Result<Discovered>),
     ClientReady(String, Client),
     ClientFailed(String),
 

@@ -15,7 +15,7 @@ translate to a terminal grid at all (see the legend).
 
 | Feature | Upstream | Luxury TUI | Notes |
 |---|---|---|---|
-| Zero-config kubeconfig detection | ✅ | ✅ | `k8s::context` — reads `$KUBECONFIG` / `~/.kube/config` |
+| Zero-config kubeconfig detection | ✅ | ✅ | `k8s::context::discover` — scans `~/.kube` for any valid kubeconfig file (not just one named `config`), same directory-scan + per-file/per-context listing as upstream; `$KUBECONFIG` still honored |
 | Cluster/context switching | ✅ | ✅ | context picker screen |
 | Cluster overview dashboard | ✅ | ✅ | node/pod counts, warning events |
 | Namespace filter | ✅ | ✅ | `n` cycles all -> ns1 -> ns2 -> ... |
