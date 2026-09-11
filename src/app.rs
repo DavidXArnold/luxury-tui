@@ -299,6 +299,13 @@ impl App {
     /// full list — the two can have different lengths, so bounding
     /// selection movement or resolving "what's highlighted" against the
     /// wrong one silently targets the wrong item.
+    ///
+    /// Deliberately doesn't go through `active_workloads()`: that builds a
+    /// full `WorkloadSummary` (including a `ready` string this doesn't
+    /// need) for display, and calling it *again* here to also get
+    /// identities would mean cloning every pod/node/workload's
+    /// name+namespace twice per render. At a couple hundred items that's
+    /// nothing; at thousands it's a real, pointless doubling.
     pub fn visible_item_refs(&self, attention_only: bool) -> Vec<ItemRef> {
         if attention_only {
             return crate::k8s::resources::filter_attention(&self.pods)
@@ -310,14 +317,39 @@ impl App {
                 })
                 .collect();
         }
-        self.active_workloads()
-            .iter()
-            .map(|w| ItemRef {
-                kind: w.kind.to_string(),
-                namespace: w.namespace.clone(),
-                name: w.name.clone(),
-            })
-            .collect()
+        match self.workload_kind {
+            WorkloadKind::Pods => self
+                .pods
+                .iter()
+                .map(|p| ItemRef {
+                    kind: "Pod".into(),
+                    namespace: p.namespace.clone(),
+                    name: p.name.clone(),
+                })
+                .collect(),
+            WorkloadKind::Nodes => self
+                .nodes
+                .iter()
+                .map(|n| ItemRef {
+                    kind: "Node".into(),
+                    namespace: String::new(),
+                    name: n.name.clone(),
+                })
+                .collect(),
+            other => self
+                .workloads_cache
+                .get(other.api_kind())
+                .map(|rows| {
+                    rows.iter()
+                        .map(|w| ItemRef {
+                            kind: w.kind.to_string(),
+                            namespace: w.namespace.clone(),
+                            name: w.name.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
     }
 
     /// Finds `self.selected` in `refs` and returns its index. If it's not

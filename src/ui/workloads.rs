@@ -5,7 +5,7 @@ use ratatui::widgets::{List, ListItem, ListState};
 use ratatui::Frame;
 
 use crate::app::{App, Screen, WORKLOAD_KINDS};
-use crate::k8s::resources::filter_attention;
+use crate::k8s::resources::{attention_count, filter_attention};
 use crate::ui::rounded_block;
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -45,9 +45,13 @@ fn draw_kind_list(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_namespace_summary(frame: &mut Frame, app: &App, area: Rect) {
-    let attention_count = filter_attention(&app.pods).len();
+    // A count-only pass, not filter_attention()'s full clone-and-collect —
+    // this and draw_items() below both want "pods needing attention" every
+    // render, and at a few thousand pods there's no reason to clone that
+    // set twice just because two panels want to know about it.
+    let count = attention_count(&app.pods);
     let block = rounded_block(&app.theme, " Attention ");
-    let text = format!("{attention_count} pod(s)\nneed attention");
+    let text = format!("{count} pod(s)\nneed attention");
     frame.render_widget(ratatui::widgets::Paragraph::new(text).block(block), area);
 }
 

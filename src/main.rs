@@ -273,6 +273,19 @@ async fn handle_event(app: &mut App, tx: &event::EventSender, evt: AppEvent) {
     }
 }
 
+/// Refreshes the baseline data every screen needs (Overview and Attention
+/// both read pods/nodes/namespaces/events regardless of what's selected on
+/// the Workloads screen) plus whichever *one* workload kind is currently
+/// selected there.
+///
+/// Earlier this fired all 10 listers — pods, nodes, events, and all 7
+/// other workload kinds — on every namespace change or 'r' press,
+/// regardless of what was on screen. Harmless at small scale, but each of
+/// those is a full, cluster-wide LIST call; at hundreds of nodes and
+/// thousands of pods that's 7 needless full-cluster round trips (and 7x
+/// the JSON to transfer and deserialize) every time, just because the user
+/// might look at Deployments next. Now only the visible kind gets fetched;
+/// switching kinds (see `cycle_kind`) fetches on demand instead.
 fn refresh_all(app: &App, tx: &event::EventSender) {
     let Some(client) = app.client.clone() else {
         return;
@@ -282,13 +295,29 @@ fn refresh_all(app: &App, tx: &event::EventSender) {
     tasks::refresh_pods(client.clone(), ns.clone(), tx.clone());
     tasks::refresh_nodes(client.clone(), tx.clone());
     tasks::refresh_events(client.clone(), ns.clone(), tx.clone());
-    tasks::refresh_deployments(client.clone(), ns.clone(), tx.clone());
-    tasks::refresh_statefulsets(client.clone(), ns.clone(), tx.clone());
-    tasks::refresh_daemonsets(client.clone(), ns.clone(), tx.clone());
-    tasks::refresh_replicasets(client.clone(), ns.clone(), tx.clone());
-    tasks::refresh_jobs(client.clone(), ns.clone(), tx.clone());
-    tasks::refresh_cronjobs(client.clone(), ns.clone(), tx.clone());
-    tasks::refresh_services(client, ns, tx.clone());
+    refresh_current_kind(app, &client, ns, tx);
+}
+
+/// Fetches whichever single workload kind is currently selected, if it
+/// isn't already covered by `refresh_all`'s baseline (Pods and Nodes are —
+/// they're fetched unconditionally above).
+fn refresh_current_kind(
+    app: &App,
+    client: &kube::Client,
+    ns: Option<String>,
+    tx: &event::EventSender,
+) {
+    let client = client.clone();
+    match app.workload_kind {
+        WorkloadKind::Pods | WorkloadKind::Nodes => {} // covered by the baseline fetch already
+        WorkloadKind::Deployments => tasks::refresh_deployments(client, ns, tx.clone()),
+        WorkloadKind::StatefulSets => tasks::refresh_statefulsets(client, ns, tx.clone()),
+        WorkloadKind::DaemonSets => tasks::refresh_daemonsets(client, ns, tx.clone()),
+        WorkloadKind::ReplicaSets => tasks::refresh_replicasets(client, ns, tx.clone()),
+        WorkloadKind::Jobs => tasks::refresh_jobs(client, ns, tx.clone()),
+        WorkloadKind::CronJobs => tasks::refresh_cronjobs(client, ns, tx.clone()),
+        WorkloadKind::Services => tasks::refresh_services(client, ns, tx.clone()),
+    }
 }
 
 async fn handle_key(app: &mut App, tx: &event::EventSender, key: crossterm::event::KeyEvent) {
@@ -463,8 +492,8 @@ fn run_palette_action(app: &mut App, tx: &event::EventSender, action: &str) {
 
 fn handle_workloads_key(app: &mut App, tx: &event::EventSender, key: crossterm::event::KeyEvent) {
     match key.code {
-        KeyCode::Left => cycle_kind(app, -1),
-        KeyCode::Right => cycle_kind(app, 1),
+        KeyCode::Left => cycle_kind(app, tx, -1),
+        KeyCode::Right => cycle_kind(app, tx, 1),
         KeyCode::Up | KeyCode::Char('k') => move_selection(app, -1),
         KeyCode::Down | KeyCode::Char('j') => move_selection(app, 1),
         KeyCode::Enter => {
@@ -525,7 +554,7 @@ fn handle_workloads_key(app: &mut App, tx: &event::EventSender, key: crossterm::
     }
 }
 
-fn cycle_kind(app: &mut App, delta: i32) {
+fn cycle_kind(app: &mut App, tx: &event::EventSender, delta: i32) {
     let idx = WORKLOAD_KINDS
         .iter()
         .position(|k| *k == app.workload_kind)
@@ -537,6 +566,15 @@ fn cycle_kind(app: &mut App, delta: i32) {
     // guess an index here would just be trusting a number that's about to
     // mean something completely different anyway.
     app.selected = None;
+
+    // Since refresh_all no longer fetches every kind up front (see its
+    // doc comment), switching to a kind we haven't loaded yet needs its
+    // own fetch — otherwise it'd just show whatever was cached from
+    // whenever this kind was last selected, which might be stale or
+    // (on first visit) empty.
+    if let Some(client) = app.client.clone() {
+        refresh_current_kind(app, &client, app.namespace_filter.clone(), tx);
+    }
 }
 
 fn move_selection(app: &mut App, delta: i32) {

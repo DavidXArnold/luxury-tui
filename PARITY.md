@@ -112,6 +112,54 @@ caught:
   logo text itself), and a namespace-filter label truncating in a
   20-column-wide panel (moved to the top bar, which has room).
 
+## Performance at scale
+
+Load-tested against a real cluster (colima's k3s) with
+[kwok](https://kwok.sigs.k8s.io/)-backed fake nodes/pods at two sizes: 200
+nodes / 2,000 pods, then 800 nodes / 8,000 pods (4x), driving the compiled
+binary interactively the same way as the correctness testing above.
+Results at 800 nodes / 8,000 pods: Overview populated in ~0.3s after
+connecting, navigating an 8,000-row Pods list stayed instant (no visible
+lag over 200 rapid keystrokes), and the process held at **3-4MB RSS and
+~0% CPU at idle** throughout — Rust + ratatui rendering was never
+remotely close to a bottleneck at either size.
+
+The actual finding was that the *fetch pattern*, not rendering, was where
+the waste lived, so that's what got fixed:
+
+- **`refresh_all` fetched every workload kind unconditionally.** Every
+  namespace-filter change or `r` press fired 10 concurrent cluster-wide
+  `LIST` calls — pods, nodes, events, and all 7 other workload kinds —
+  regardless of which one was actually on screen. Harmless at small scale;
+  at hundreds/thousands of objects it's 7 needless full-cluster round
+  trips (and 7x the JSON to transfer and decode) on the chance the user
+  looks at Deployments next. Now only the visible kind gets fetched, and
+  switching kinds (`cycle_kind`) fetches on demand instead.
+- **Events were fetched unfiltered.** Only Warning-type events are ever
+  displayed (`warning_events`), but every event was pulled over the wire
+  and filtered client-side. In a busy cluster, Normal events (scheduled,
+  image pulled, container started, ...) vastly outnumber Warnings. Now
+  uses a server-side field selector (`type=Warning`) — a real reduction in
+  a genuinely busy cluster, and free even when it isn't.
+- **`visible_item_refs` and the Attention side panel each redundantly
+  recomputed a full clone of data another function had just built** (once
+  to build display rows, again to build/count identities for selection
+  tracking) — fixed to derive directly from the same source once instead
+  of doubling the cloning work.
+
+**Not done, and worth flagging honestly:** every list here is still a
+plain `Api::list()` — a full snapshot on each fetch, not the
+watch/informer-based incremental caching real large-scale k8s tooling
+(k9s, Lens, and Luxury Yacht itself) uses under the hood. At the tested
+sizes this doesn't matter (confirmed above); at truly large scale — tens
+of thousands of pods, or many concurrent users hitting a shared apiserver
+— switching to `kube::runtime::watcher`/`reflector` for Pods and Nodes
+would be the next real lever: one initial sync, then only deltas over the
+wire, plus near-real-time updates without a manual refresh. That's a
+meaningfully larger architectural change than anything else in this
+section, so it's recorded here as a recommendation rather than attempted
+speculatively.
+
 ## Keeping up with upstream
 
 `.github/workflows/upstream-watch.yml` runs weekly (and on demand), checks

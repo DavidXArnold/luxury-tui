@@ -159,16 +159,25 @@ pub async fn list_pods(client: &Client, namespace: Option<&str>) -> Result<Vec<P
         .collect())
 }
 
+fn needs_attention(p: &PodSummary) -> bool {
+    !matches!(p.phase.as_str(), "Running" | "Succeeded") || p.restarts >= 5 || p.ready.0 < p.ready.1
+}
+
 /// Pods that need attention: not Running/Succeeded, or restarting a lot.
 pub fn filter_attention(pods: &[PodSummary]) -> Vec<PodSummary> {
     pods.iter()
-        .filter(|p| {
-            !matches!(p.phase.as_str(), "Running" | "Succeeded")
-                || p.restarts >= 5
-                || p.ready.0 < p.ready.1
-        })
+        .filter(|p| needs_attention(p))
         .cloned()
         .collect()
+}
+
+/// Same filter as `filter_attention`, without cloning every match — for
+/// when only the count is needed (the Attention screen's side panel shows
+/// this next to the full filtered+cloned list `filter_attention` builds
+/// for the main pane; at thousands of pods, doing the full clone twice
+/// just to also read `.len()` is pointless work).
+pub fn attention_count(pods: &[PodSummary]) -> usize {
+    pods.iter().filter(|p| needs_attention(p)).count()
 }
 
 macro_rules! workload_lister {
@@ -277,12 +286,19 @@ workload_lister!(list_services, Service, "Service", |s: &Service| {
         .unwrap_or_else(|| "ClusterIP".to_string())
 });
 
+/// Fetches Warning-type events (the only kind anything here ever displays
+/// — see `warning_events`) via a server-side field selector rather than
+/// pulling every event and filtering client-side. In a busy cluster,
+/// Normal events (pod scheduled, image pulled, container started, ...)
+/// vastly outnumber Warnings; there's no reason to ship all of them over
+/// the wire just to throw most away on arrival.
 pub async fn list_events(client: &Client, namespace: Option<&str>) -> Result<Vec<EventSummary>> {
+    let params = ListParams::default().fields("type=Warning");
     let api: Api<Event> = match namespace {
         Some(ns) => Api::namespaced(client.clone(), ns),
         None => Api::all(client.clone()),
     };
-    let mut list = api.list(&ListParams::default()).await?;
+    let mut list = api.list(&params).await?;
     list.items
         .sort_by_key(|e| std::cmp::Reverse(e.count.unwrap_or(0)));
     Ok(list
@@ -362,5 +378,20 @@ mod tests {
         let mut pod = healthy_pod("web-1");
         pod.ready = (0, 1);
         assert_eq!(filter_attention(&[pod]).len(), 1);
+    }
+
+    #[test]
+    fn attention_count_always_matches_filter_attention_length() {
+        // attention_count exists purely so the Attention screen's side
+        // panel doesn't have to clone the whole matching set just to read
+        // its length — they must never disagree.
+        let mut pending = healthy_pod("pending-1");
+        pending.phase = "Pending".into();
+        let mut flapping = healthy_pod("flapping-1");
+        flapping.restarts = 9;
+        let pods = vec![healthy_pod("ok-1"), pending, flapping, healthy_pod("ok-2")];
+
+        assert_eq!(attention_count(&pods), filter_attention(&pods).len());
+        assert_eq!(attention_count(&pods), 2);
     }
 }
