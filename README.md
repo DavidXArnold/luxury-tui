@@ -2,6 +2,14 @@
 
 <h1 align="center">Luxury TUI</h1>
 
+> [!WARNING]
+> **This project is archived and no longer maintained.** The repository
+> is read-only on GitHub: no new issues, pull requests, or releases, and
+> the scheduled CI/upstream-watch workflows no longer run. Everything
+> below is left as-is for reference. The code (GPL-3.0-or-later, see
+> [License](#license)) is free to fork and continue if you want to pick
+> it back up.
+
 > [!IMPORTANT]
 > **Luxury TUI is an independent, unaffiliated fan project.** It is not made
 > by, endorsed by, or associated with John Jeffers or Luxury Yacht in any
@@ -139,13 +147,17 @@ also GPL-3.0.
 
 ## Contributing
 
-Issues and PRs welcome. `cargo fmt`, `cargo clippy --all-targets -- -D
-warnings`, and `cargo test` all run in CI and are expected to pass. See
-[PARITY.md](PARITY.md) before starting work on a new feature — it tracks
-what's implemented, what's planned, and what upstream has shipped that we
-haven't looked at yet.
+This repository is archived (see the notice at the top) — issues and pull
+requests are disabled here. If you want to keep building on it, fork it;
+the notes below describe how the original CI validated changes and still
+apply to a fork.
 
-CI also runs `tests/cluster_integration.rs` against a real
+`cargo fmt`, `cargo clippy --all-targets -- -D warnings`, and `cargo
+test` all ran in CI and are expected to pass. See [PARITY.md](PARITY.md)
+for what was implemented, what was planned, and what upstream had shipped
+that hadn't been looked at yet as of archival.
+
+CI also ran `tests/cluster_integration.rs` against a real
 [`kind`](https://kind.sigs.k8s.io/) cluster with
 [`kwok`](https://kwok.sigs.k8s.io/) installed. To run those locally against
 your own kind+kwok cluster:
